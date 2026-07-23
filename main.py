@@ -13,7 +13,7 @@ logging.basicConfig(
   format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
   level=logging.INFO,
 )
-
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
   payload = context.args[0] if context.args else None
