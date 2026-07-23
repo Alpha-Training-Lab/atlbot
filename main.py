@@ -25,7 +25,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
   # Future: elif payload == induction.MODULE: ...
 
   await update.message.reply_text(
-    "👋 Hi! I'm Sam. An ATL task automation Bot. Please use the link shared in your ATL group "
+    "👋 Hi! I'm Alpha. An ATL task automation Bot. Please use the link shared in your ATL group "
     "so I know what to sign you up for."
   )
 
