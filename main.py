@@ -3,7 +3,7 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-import db
+from src import db
 from config import BOT_TOKEN
 from src.modules import leadership
 # =========================================================================
