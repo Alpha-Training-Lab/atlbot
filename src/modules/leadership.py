@@ -3,7 +3,7 @@ import logging
 from telegram.constants import ChatMemberStatus
 from telegram.error import TelegramError
 
-import db
+from src import db
 from config import LEADERSHIP_GROUP_ID
 # =========================================================
 
