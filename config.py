@@ -1,5 +1,11 @@
 import os
 
+from dotenv import load_dotenv
+# ================================
+
+load_dotenv()
+
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 LEADERSHIP_GROUP_ID = int(os.environ.get("LEADERSHIP_GROUP_ID") or 0)
 DB_PATH = os.environ.get("ATL_DB_PATH", "atl_bot.db")
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]

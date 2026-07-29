@@ -1,2 +1,4 @@
 python-telegram-bot==22.8
 APScheduler==3.11.3
+google-genai==2.15.0
+python-dotenv==1.2.2

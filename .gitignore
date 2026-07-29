@@ -1,6 +1,7 @@
 # Environment / secrets
 .env
 *.pem
+.csv
 
 # Python
 __pycache__/
@@ -16,6 +17,8 @@ env/
 # Database
 *.db
 *.sqlite3
+*.csv
+.csv
 
 # Editors / OS
 .vscode/
