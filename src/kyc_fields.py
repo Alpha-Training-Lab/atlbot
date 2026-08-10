@@ -22,7 +22,7 @@ KYC_FIELDS = [
         "prompt": "Would you like to receive the ATL newsletter by email?",
         "type": "choice",
         "options": ["Yes, sign me up", "No thanks"],
-        "required": True, "active": False, "order": 25,
+        "required": False, "active": False, "order": 25,
     },
     {
         "key": "mobile",
