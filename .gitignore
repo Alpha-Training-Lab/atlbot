@@ -27,3 +27,11 @@ env/
 
 # Logs
 *.log
+
+# Tests / debug / non-production scripts
+test_*.py
+*_test.py
+tests/
+src/inspect_data.py
+src/inspect_db.py
+src/wipe_test_data.py

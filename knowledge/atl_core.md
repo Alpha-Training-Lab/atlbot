@@ -16,6 +16,23 @@ Community motto: "The Standard Still Stands."
   (breaking the rules, defrauding members, or similar).
 - Members are not removed for inactivity.
 
+## Registration (KYC)
+After an admin approves your induction summary, you complete
+registration with Alpha in a direct message.
+
+Alpha asks for your details one question at a time. This includes
+identity documents: a photo of an accepted ID, and a photo of you
+holding that same ID.
+
+Accepted IDs: NIN slip, international passport, driver's licence,
+voter's card.
+
+Registration is required. You cannot be given access to the community
+groups until it is complete. Your answers go to the admin team for
+final review.
+
+You can stop partway and come back — Alpha remembers where you left off.
+
 ## Community rules
 These apply in all ATL groups, and to every member including leaders.
 No one is exempt.
@@ -64,7 +81,8 @@ heeded, it leads to removal from the community.
 [[FILL: roughly how long does admin review take?]]
 
 ## Crossing to the other side
-[[FILL: what it means, when it happens, what changes for the member]]
+crossig to the other side is specifically for members in induction group. When the induction group members have been able to get access to full ATL groups and contents
+that is whe the person has crossed to the other side.
 
 ## Classes and training
 [[FILL: what classes exist, how members access them, what the
