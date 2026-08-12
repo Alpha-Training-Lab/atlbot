@@ -1,13 +1,18 @@
 # Environment / secrets
 .env
 *.pem
-.csv
+secrets/
+data/
 
 # Python
 __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
 
 # Virtual environments
 .venv/
@@ -18,12 +23,14 @@ env/
 *.db
 *.sqlite3
 *.csv
-.csv
 
 # Editors / OS
 .vscode/
 .idea/
 .DS_Store
+
+# Claude Code local settings (project-shared settings, if any, stay tracked)
+.claude/settings.local.json
 
 # Logs
 *.log
@@ -32,6 +39,6 @@ env/
 test_*.py
 *_test.py
 tests/
-src/inspect_data.py
-src/inspect_db.py
-src/wipe_test_data.py
+scripts/inspect_data.py
+scripts/inspect_db.py
+scripts/wipe_test_data.py

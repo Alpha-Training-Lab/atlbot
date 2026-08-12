@@ -6,7 +6,6 @@ import sqlite3
 from pathlib import Path
 from contextlib import contextmanager
 # ========================================
-
 DB_PATH = Path(__file__).resolve().parent.parent / "atl_bot.db"
 
 # --- status values ---------------------------------------------------
@@ -80,7 +79,7 @@ CREATE TABLE IF NOT EXISTS kyc_responses (
     UNIQUE(user_id, field_key)
 );
 """
-
+# ===============================================================
 
 @contextmanager
 def get_conn():
@@ -253,6 +252,30 @@ def bump_kyc_attempts(user_id):
       "SELECT kyc_attempts FROM members WHERE user_id = ?", (user_id,)
     ).fetchone()
   return row["kyc_attempts"] if row else 0
+
+
+def count_events(user_id, event):
+  """How many times this event has been logged for a member."""
+  with get_conn() as conn:
+    row = conn.execute(
+      "SELECT COUNT(*) AS n FROM member_events "
+      "WHERE user_id = ? AND event = ?",
+      (user_id, event),
+    ).fetchone()
+  return row["n"]
+
+
+def seconds_since_last_event(user_id, event):
+  """Seconds since the most recent matching event, or None if never.
+  Computed in SQL so UTC/local time can't drift."""
+  with get_conn() as conn:
+    row = conn.execute(
+      "SELECT (julianday('now') - julianday(created_at)) * 86400 AS secs "
+      "FROM member_events WHERE user_id = ? AND event = ? "
+      "ORDER BY id DESC LIMIT 1",
+      (user_id, event),
+    ).fetchone()
+  return row["secs"] if row else None
 
 
 
