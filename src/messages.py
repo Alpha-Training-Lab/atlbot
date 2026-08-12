@@ -1,4 +1,4 @@
-from config import MAIN_GROUP_LINK, INDUCTION_PINNED_URL
+from config import MAIN_GROUP_LINK
 # ===========================================================================
 # ----- APPROVED MESSAGE ------------------------------------------------------
 WELCOME_APPROVED = f"""Your registration has been approved.🎉 Welcome to Alpha Training Lab.
@@ -38,8 +38,7 @@ WELCOME_INDUCTION = """Welcome, {name}. You're at the ATL Induction Center.
 Alpha Training Lab is a non-profit community. Membership is free, permanent, and no one here will ever ask you for money.
 
 Here's what to do:
-
-1. Read the induction material from the top. Start here: {INDUCTION_PINNED_URL}
+1. Read the induction material from the top. Start here: {url}
 2. Take your time. It's a long read and it isn't meant to be finished in a day — most people spend one to two weeks on it.
 3. You would find instructions what to do when you done reading the induction material. Follow them carefully.
 4. An admin will review you, then I'll take you through registration privately.
