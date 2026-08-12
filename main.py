@@ -10,9 +10,9 @@ from telegram.ext import (
   filters,
 )
 
-from config import BOT_TOKEN, ONBOARDING_GROUP_ID
+from config import BOT_TOKEN, INDUCTION_GROUP_ID, ONBOARDING_GROUP_ID
 from src import db
-from src.modules import admin, kyc, leadership
+from src.modules import admin, kyc, leadership, induction
 from src.modules.alpha import handle_alpha_message
 # ========================================================
 
@@ -27,8 +27,11 @@ logger = logging.getLogger(__name__)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
   payload = context.args[0] if context.args else None
 
-  if payload == leadership.MODULE:
-    await leadership.handle_registration(update, context)
+  if payload == "kyc":
+    user = update.effective_user
+    db.upsert_member(user.id, username=user.username,
+                     first_name=user.first_name, last_name=user.last_name)
+    await kyc.handle_kyc_entry(context.bot, user.id)
     return
 
   await update.message.reply_text(
@@ -66,6 +69,21 @@ def main() -> None:
   app.add_handler(CommandHandler("start", start), group=0)
   app.add_handler(CommandHandler("chatid", chat_id), group=0)
   app.add_handler(CommandHandler("kyc", cmd_kyc), group=0)   # TEMPORARY
+
+  # ----- group 0: induction group --------------------------------------
+  app.add_handler(
+    MessageHandler(filters.Chat(INDUCTION_GROUP_ID)
+                   & filters.StatusUpdate.NEW_CHAT_MEMBERS,
+                   induction.handle_new_member),
+    group=0,
+  )
+  app.add_handler(
+    MessageHandler(filters.Chat(INDUCTION_GROUP_ID) & filters.TEXT
+                   & ~filters.COMMAND,
+                   induction.handle_induction_post), group=0)
+  app.add_handler(
+    CallbackQueryHandler(induction.handle_induction_decision,
+                         pattern=r"^ind:"), group=0)
 
   # ----- group 0: KYC collector ----------------------------------------
   app.add_handler(

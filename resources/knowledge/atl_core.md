@@ -32,10 +32,8 @@ professional courses.
 2. Read the induction material from the top. It is a long read, and it
    is not something that can be finished in a day. Admins check how long
    you have been in the group.
-3. When you have genuinely finished reading, post in the induction group
-   and tag @AlphaTrainingLab_bot, @ShemmyCypher, @Dr_evidence and
-   @Epitome61 — all four. Tagging Alpha is what lets the bot pick up
-   your request.
+3. When you have genuinely finished reading, Instructionns on what to do next is in the material on the group. 
+   read carefully and you will find it. Once you have done the necessery. Alpha will take it from there. 
 4. There is no required wording, length or format for that post. Admins
    are not looking for particular words. What they check is that you
    have spent real time in the group and that you have tagged the
