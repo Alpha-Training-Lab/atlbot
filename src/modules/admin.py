@@ -2,6 +2,7 @@
 import logging
 import re
 
+from datetime import datetime, timedelta, timezone
 from telegram import (
   ForceReply,
   InlineKeyboardButton,
@@ -10,10 +11,10 @@ from telegram import (
 from telegram.ext import ContextTypes
 
 
-from config import ONBOARDING_GROUP_ID, MAX_DECLINES
+from config import ONBOARDING_GROUP_ID, MAX_DECLINES, MAIN_GROUP_ID, INVITE_TTL_SECONDS
 from src import db
 from src.kyc_fields import active_fields
-from src.messages import WELCOME_APPROVED
+from src.messages import welcome_approved
 # ===========================================================================
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,17 @@ def _reason_keyboard(user_id, mask=0):
 
 def _reasons_from_mask(mask):
   return [r for i, r in enumerate(DECLINE_REASONS) if mask & (1 << i)]
+
+
+async def _personal_invite(bot, user_id):
+  link = await bot.create_chat_invite_link(
+    chat_id=MAIN_GROUP_ID,
+    name=f"member-{user_id}"[:32],
+    member_limit=1,
+    expire_date=datetime.now(timezone.utc)
+                + timedelta(seconds=INVITE_TTL_SECONDS),
+  )
+  return link.invite_link
 
 
 async def send_access_request(bot, user_id):
@@ -202,7 +214,13 @@ async def handle_access_decision(update, context: ContextTypes.DEFAULT_TYPE):
     db.set_status(target_id, db.STATUS_ACTIVE, actor_user_id=admin_id)
     await query.edit_message_text(
       f"{query.message.text}\n\n✅ APPROVED by {admin_name}")
-    await context.bot.send_message(chat_id=target_id, text=WELCOME_APPROVED)
+    try:
+      invite = await _personal_invite(context.bot, target_id)
+    except Exception:
+      logger.exception("Could not create invite for %s", target_id)
+      invite = None
+
+    await context.bot.send_message(chat_id=target_id, text=welcome_approved(invite))
     return
 
   if action == "decline":
@@ -278,3 +296,4 @@ async def handle_decline_reason(update, context: ContextTypes.DEFAULT_TYPE):
   await message.reply_text(
     "Decline recorded and the member has been told." if ok
     else "That member has already been decided.")
+

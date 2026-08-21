@@ -1,7 +1,7 @@
 from config import MAIN_GROUP_LINK
 # ===========================================================================
 # ----- APPROVED MESSAGE ------------------------------------------------------
-WELCOME_APPROVED = f"""Your registration has been approved.🎉 Welcome to Alpha Training Lab.
+WELCOME_BODY = """Your registration has been approved.🎉 Welcome to Alpha Training Lab.
 Your Leverage to the better life you seek.
 
 Before you join, these are the rules. They apply in every ATL group, to every member — leaders included. No one is exempt.
@@ -24,12 +24,22 @@ TAKING PART
 11. Ask questions — for your own benefit and everyone else's.
 12. Let the admins know if you will be away for a long period.
 
-Moderation is handled by the ATL administration with the help of Alpha(@AlphaTrainingLab_bot). Breaking a rule brings a warning first. If the warning is ignored, it leads to removal.
+Moderation is handled by the ATL administration with the help of Alpha(@AlphaTrainingLab_bot). Breaking a rule brings a warning first. If the warning is ignored, it leads to removal."""
+
+WELCOME_APPROVED = f"""{WELCOME_BODY}
 
 You are now free to join the main group:
 {MAIN_GROUP_LINK}
 
 Welcome aboard."""
+
+
+def welcome_approved(invite_link=None):
+  tail = (f"You are now free to join the main group:\n{invite_link}\n\n"
+          "This link is yours alone and expires in 48 hours."
+          if invite_link else
+          "An admin will send you your group link shortly.")
+  return f"{WELCOME_BODY}\n\n{tail}\n\nWelcome aboard."
 
 
 # ----- INDUCTION GROUP ------------------------------------------------------
@@ -44,3 +54,16 @@ Here's what to do:
 4. An admin will review you, then I'll take you through registration privately.
 
 Questions while you read? Message me directly — I'm @AlphaTrainingLab_bot."""
+
+
+# ------ INDUCTION POST INCOMPLETE ------------------------------------------------------
+INDUCTION_POST_INCOMPLETE = """Thanks {name} — I've seen your message, but it isn't complete, so I can't pass it to the onboarding team yet.
+
+What's wrong: to move to the next phase, your post has to tag relevant members, not only me. You've missed at least one of them. The handles are named in the pinned instructions, and knowing who they are is part of what you pick up while reading.
+
+What to do:
+1. Read the induction material from the top. Start here: {url}
+2. Look out for the most recent instruction on how to join the group, make sure you follow them carefully, and make sure you tag the relevant members in your post.
+3. Post here once more, tagging me and every admin listed there.
+
+Nothing is lost and there's no penalty — post again as soon as you're ready, and I'll pick it straight up. If you get stuck, message me directly and I'll walk you through it."""

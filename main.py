@@ -4,6 +4,7 @@ from telegram import Update
 from telegram.ext import (
   Application,
   CallbackQueryHandler,
+  ChatJoinRequestHandler,
   CommandHandler,
   ContextTypes,
   MessageHandler,
@@ -60,10 +61,17 @@ async def on_error(update, context):
   logger.exception("Handler error", exc_info=context.error)
 
 
+
 def main() -> None:
   db.init_db()
 
   app = Application.builder().token(BOT_TOKEN).build()
+
+  if app.job_queue is None:
+    logger.error("JobQueue unavailable — install python-telegram-bot[job-queue]")
+  else:
+    app.job_queue.run_repeating(induction.sweep_deletions,
+                                interval=300, first=10)
 
   # ----- group 0: commands ---------------------------------------------
   app.add_handler(CommandHandler("start", start), group=0)
@@ -107,6 +115,8 @@ def main() -> None:
     group=0,
   )
 
+  app.add_handler(ChatJoinRequestHandler(induction.handle_join_request), group=0)
+
   # ----- group 1: Alpha LLM catch-all ----------------------------------
   app.add_handler(
     MessageHandler(
@@ -118,7 +128,7 @@ def main() -> None:
 
 
   app.add_error_handler(on_error)
-  app.run_polling()
+  app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 

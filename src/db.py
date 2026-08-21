@@ -78,6 +78,17 @@ CREATE TABLE IF NOT EXISTS kyc_responses (
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(user_id, field_key)
 );
+
+CREATE TABLE IF NOT EXISTS scheduled_deletions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id    INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    delete_at  TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_deletions_due
+  ON scheduled_deletions(delete_at);
 """
 # ===============================================================
 
@@ -278,6 +289,27 @@ def seconds_since_last_event(user_id, event):
   return row["secs"] if row else None
 
 
+def schedule_deletion(chat_id, message_id, seconds):
+  with get_conn() as conn:
+    conn.execute(
+      "INSERT INTO scheduled_deletions (chat_id, message_id, delete_at) "
+      "VALUES (?, ?, datetime('now', ?))",
+      (chat_id, message_id, f"+{int(seconds)} seconds"),
+    )
+
+
+def due_deletions(limit=50):
+  with get_conn() as conn:
+    return conn.execute(
+      "SELECT * FROM scheduled_deletions "
+      "WHERE delete_at <= datetime('now') ORDER BY delete_at LIMIT ?",
+      (limit,),
+    ).fetchall()
+
+
+def clear_deletion(row_id):
+  with get_conn() as conn:
+    conn.execute("DELETE FROM scheduled_deletions WHERE id = ?", (row_id,))
 
 
 # ==================================================

@@ -1,20 +1,22 @@
 """Induction group listener: welcome, catch the tag, first admin gate."""
 import logging
+import re
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from src import db
-from src.messages import WELCOME_INDUCTION
+from src.messages import WELCOME_INDUCTION, INDUCTION_POST_INCOMPLETE
 from config import (
   INDUCTION_GROUP_ID, ONBOARDING_GROUP_ID,
-  INDUCTION_PINNED_URL, MIN_INDUCTION_DAYS,
+  INDUCTION_PINNED_URL, MIN_INDUCTION_SECONDS,
+  WELCOME_DELETE_SECONDS, REMINDER_DELETE_SECONDS,
+  REQUIRED_TAGS,
 )
 # ===============================================================================
 logger = logging.getLogger(__name__)
 
-MIN_INDUCTION_SECONDS = MIN_INDUCTION_DAYS * 86400
 # ===============================================================================
 def _message_link(chat_id, message_id):
   """Supergroup message link: strip the -100 prefix."""
@@ -23,6 +25,26 @@ def _message_link(chat_id, message_id):
 
 def _mention(user_id, name):
   return f'<a href="tg://user?id={user_id}">{name}</a>'
+
+def _humanise(seconds):
+  seconds = int(seconds)
+  if seconds >= 86400:
+    n = -(-seconds // 86400)          # ceiling division
+    return f"{n} day{'s' if n != 1 else ''}"
+  if seconds >= 3600:
+    n = -(-seconds // 3600)
+    return f"{n} hour{'s' if n != 1 else ''}"
+  n = max(1, -(-seconds // 60))
+  return f"{n} minute{'s' if n != 1 else ''}"
+
+
+def _missing_tags(text):
+  """Required admin handles absent from the post."""
+  missing = []
+  for tag in REQUIRED_TAGS:
+    if not re.search(re.escape(tag) + r"\b", text or "", re.IGNORECASE):
+      missing.append(tag)
+  return missing
 
 
 # --- 1. welcome on join ------------------------------------------------
@@ -42,6 +64,27 @@ async def handle_new_member(update, context: ContextTypes.DEFAULT_TYPE):
                                url=INDUCTION_PINNED_URL),
       disable_web_page_preview=True,
     )
+
+    sent = await message.reply_text(...)
+    db.schedule_deletion(sent.chat_id, sent.message_id,
+                         WELCOME_DELETE_SECONDS)
+    
+    sent = await message.reply_text(...)
+    db.schedule_deletion(sent.chat_id, sent.message_id,
+                         REMINDER_DELETE_SECONDS)
+
+
+async def handle_join_request(update, context):
+  req = update.chat_join_request
+  user_id = req.from_user.id
+  member = db.get_member(user_id)
+
+  if member and member["status"] == db.STATUS_ACTIVE:
+    await context.bot.approve_chat_join_request(req.chat.id, user_id)
+    db.log_event(user_id, "joined_main_group")
+  else:
+    await context.bot.decline_chat_join_request(req.chat.id, user_id)
+    db.log_event(user_id, "join_request_declined")
 
 
 # --- 2. catch the tag --------------------------------------------------
@@ -93,12 +136,26 @@ async def handle_induction_post(update, context: ContextTypes.DEFAULT_TYPE):
   observed = db.seconds_since_last_event(user.id, "joined_induction")
 
   if observed is not None and observed < MIN_INDUCTION_SECONDS:
-    days_left = int((MIN_INDUCTION_SECONDS - observed) // 86400) + 1
+    remaining = MIN_INDUCTION_SECONDS - observed
     await message.reply_text(
       f"Thanks {user.first_name or ''} — but you joined recently. "
-      f"Members spend at least {MIN_INDUCTION_DAYS} days on the induction "
-      f"material. Come back in about {days_left} day"
-      f"{'s' if days_left != 1 else ''} and tag me again.")
+      f"Members spend at least {_humanise(MIN_INDUCTION_SECONDS)} on the "
+      f"induction material. Come back in about {_humanise(remaining)} "
+      "and tag me again.")
+    return
+
+  missing = _missing_tags(message.text)
+  if missing:
+    db.log_event(user.id, "induction_post_incomplete")
+    sent = await message.reply_text(
+      INDUCTION_POST_INCOMPLETE.format(
+        name=user.first_name or "",
+        url=INDUCTION_PINNED_URL,
+      ),
+      disable_web_page_preview=True,
+    )
+    db.schedule_deletion(sent.chat_id, sent.message_id,
+                         REMINDER_DELETE_SECONDS)
     return
 
   app_id = db.create_application(
@@ -212,3 +269,16 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
       parse_mode=ParseMode.HTML,
       disable_web_page_preview=True,
     )
+
+
+# ----- 5. sweep deletions ------------------------------------------------
+async def sweep_deletions(context: ContextTypes.DEFAULT_TYPE):
+  for row in db.due_deletions():
+    try:
+      await context.bot.delete_message(row["chat_id"], row["message_id"])
+    except Exception as e:
+      logger.warning("Could not delete %s in %s: %s",
+                     row["message_id"], row["chat_id"], e)
+    db.clear_deletion(row["id"])   # clear either way — don't retry forever
+
+
