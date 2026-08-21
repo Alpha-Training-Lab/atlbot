@@ -59,18 +59,21 @@ async def handle_new_member(update, context: ContextTypes.DEFAULT_TYPE):
     db.upsert_member(user.id, username=user.username,
                      first_name=user.first_name, last_name=user.last_name)
     db.log_event(user.id, "joined_induction")   # bot WATCHED them arrive
-    await message.reply_text(
+    welcome = await message.reply_text(
       WELCOME_INDUCTION.format(name=user.first_name or "friend",
                                url=INDUCTION_PINNED_URL),
       disable_web_page_preview=True,
     )
-
-    sent = await message.reply_text(...)
-    db.schedule_deletion(sent.chat_id, sent.message_id,
+    db.schedule_deletion(welcome.chat_id, welcome.message_id,
                          WELCOME_DELETE_SECONDS)
-    
-    sent = await message.reply_text(...)
-    db.schedule_deletion(sent.chat_id, sent.message_id,
+
+    reminder = await message.reply_text(
+      "Quick reminder: take your time with the material — most people "
+      "spend one to two weeks on it. When you're ready, come back here "
+      "and tag me; the pinned instructions explain what your post needs "
+      "to include."
+    )
+    db.schedule_deletion(reminder.chat_id, reminder.message_id,
                          REMINDER_DELETE_SECONDS)
 
 

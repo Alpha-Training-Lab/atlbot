@@ -1,13 +1,23 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 # ================================
 load_dotenv()
 
+BASE_DIR = Path(__file__).resolve().parent
+
+# ----- Token/API keys -------------------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-DB_PATH = os.environ.get("ATL_DB_PATH", "atl_bot.db")
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
+
+# ----- Database settings -------------------------
+_db_path_env = os.environ.get("ATL_DB_PATH")
+DB_PATH = Path(_db_path_env).expanduser() if _db_path_env else BASE_DIR / "atl_bot.db"
+
+
+# ----- Induction settings -------------------------
 MAX_DECLINES = 3
 COOLDOWN_SECONDS = 6 * 3600
 MIN_INDUCTION_DAYS = 10

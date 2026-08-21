@@ -3,12 +3,10 @@
 import logging
 from pathlib import Path
 
-from dotenv import load_dotenv
 from config import GEMINI_API_KEY
 from google import genai
 from google.genai import errors, types
 # ========================================
-load_dotenv()
 logger = logging.getLogger(__name__)
 
 _client = genai.Client(api_key=GEMINI_API_KEY)
