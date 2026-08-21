@@ -6,7 +6,6 @@ import sqlite3
 from pathlib import Path
 from contextlib import contextmanager
 # ========================================
-
 DB_PATH = Path(__file__).resolve().parent.parent / "atl_bot.db"
 
 # --- status values ---------------------------------------------------
@@ -79,8 +78,19 @@ CREATE TABLE IF NOT EXISTS kyc_responses (
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(user_id, field_key)
 );
-"""
 
+CREATE TABLE IF NOT EXISTS scheduled_deletions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id    INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    delete_at  TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_deletions_due
+  ON scheduled_deletions(delete_at);
+"""
+# ===============================================================
 
 @contextmanager
 def get_conn():
@@ -255,6 +265,51 @@ def bump_kyc_attempts(user_id):
   return row["kyc_attempts"] if row else 0
 
 
+def count_events(user_id, event):
+  """How many times this event has been logged for a member."""
+  with get_conn() as conn:
+    row = conn.execute(
+      "SELECT COUNT(*) AS n FROM member_events "
+      "WHERE user_id = ? AND event = ?",
+      (user_id, event),
+    ).fetchone()
+  return row["n"]
+
+
+def seconds_since_last_event(user_id, event):
+  """Seconds since the most recent matching event, or None if never.
+  Computed in SQL so UTC/local time can't drift."""
+  with get_conn() as conn:
+    row = conn.execute(
+      "SELECT (julianday('now') - julianday(created_at)) * 86400 AS secs "
+      "FROM member_events WHERE user_id = ? AND event = ? "
+      "ORDER BY id DESC LIMIT 1",
+      (user_id, event),
+    ).fetchone()
+  return row["secs"] if row else None
+
+
+def schedule_deletion(chat_id, message_id, seconds):
+  with get_conn() as conn:
+    conn.execute(
+      "INSERT INTO scheduled_deletions (chat_id, message_id, delete_at) "
+      "VALUES (?, ?, datetime('now', ?))",
+      (chat_id, message_id, f"+{int(seconds)} seconds"),
+    )
+
+
+def due_deletions(limit=50):
+  with get_conn() as conn:
+    return conn.execute(
+      "SELECT * FROM scheduled_deletions "
+      "WHERE delete_at <= datetime('now') ORDER BY delete_at LIMIT ?",
+      (limit,),
+    ).fetchall()
+
+
+def clear_deletion(row_id):
+  with get_conn() as conn:
+    conn.execute("DELETE FROM scheduled_deletions WHERE id = ?", (row_id,))
 
 
 # ==================================================
