@@ -1,4 +1,3 @@
-"""Induction group listener: welcome, catch the tag, first admin gate."""
 import logging
 import re
 
@@ -26,6 +25,8 @@ GROUP_REPLY_CONTEXT = (
   f"point them to {INDUCTION_PINNED_URL}."
 )
 # ===============================================================================
+
+
 def _message_link(chat_id, message_id):
   """Supergroup message link: strip the -100 prefix."""
   return f"https://t.me/c/{str(chat_id).replace('-100', '', 1)}/{message_id}"
@@ -33,6 +34,7 @@ def _message_link(chat_id, message_id):
 
 def _mention(user_id, name):
   return f'<a href="tg://user?id={user_id}">{name}</a>'
+
 
 def _humanise(seconds):
   seconds = int(seconds)
@@ -61,7 +63,6 @@ def _schedule_pair(user_message, bot_message, seconds):
   db.schedule_deletion(user_message.chat_id, user_message.message_id, seconds)
 
 
-
 # --- 1. welcome on join ------------------------------------------------
 async def handle_new_member(update, context: ContextTypes.DEFAULT_TYPE):
   message = update.message
@@ -74,6 +75,7 @@ async def handle_new_member(update, context: ContextTypes.DEFAULT_TYPE):
     db.upsert_member(user.id, username=user.username,
                      first_name=user.first_name, last_name=user.last_name)
     db.log_event(user.id, "joined_induction")   # bot WATCHED them arrive
+
     welcome = await message.reply_text(
       WELCOME_INDUCTION.format(name=user.first_name or "friend",
                                url=INDUCTION_PINNED_URL),
@@ -82,16 +84,9 @@ async def handle_new_member(update, context: ContextTypes.DEFAULT_TYPE):
     db.schedule_deletion(welcome.chat_id, welcome.message_id,
                          WELCOME_DELETE_SECONDS)
 
-    reminder = await message.reply_text(
-      "Quick reminder: take your time with the material — most people "
-      "spend one to two weeks on it. When you're ready, come back here "
-      "and tag me; the pinned instructions explain what your post needs "
-      "to include."
-    )
-    db.schedule_deletion(reminder.chat_id, reminder.message_id,
-                         REMINDER_DELETE_SECONDS)
 
-
+# --- not currently used: member_limit=1 links never raise join requests.
+# Kept as a safety net if the invite strategy ever changes.
 async def handle_join_request(update, context):
   req = update.chat_join_request
   user_id = req.from_user.id
@@ -106,12 +101,12 @@ async def handle_join_request(update, context):
 
 
 # --- 2. catch the tag --------------------------------------------------
-def _bot_was_tagged(message, bot_username):
-  if message.reply_to_message and message.reply_to_message.from_user:
-    if message.reply_to_message.from_user.is_bot:
-      return True
-  text = message.text or ""
-  return f"@{bot_username}".lower() in text.lower()
+def _bot_was_tagged(message, bot):
+  """True if THIS bot was mentioned or replied to."""
+  replied = message.reply_to_message
+  if replied and replied.from_user and replied.from_user.id == bot.id:
+    return True
+  return f"@{bot.username}".lower() in (message.text or "").lower()
 
 
 async def handle_induction_post(update, context: ContextTypes.DEFAULT_TYPE):
@@ -120,7 +115,7 @@ async def handle_induction_post(update, context: ContextTypes.DEFAULT_TYPE):
     return
   if not message.text:
     return
-  if not _bot_was_tagged(message, context.bot.username):
+  if not _bot_was_tagged(message, context.bot):
     return
 
   user = update.effective_user
@@ -130,24 +125,27 @@ async def handle_induction_post(update, context: ContextTypes.DEFAULT_TYPE):
   status = member["status"]
 
   if status == db.STATUS_PENDING_REVIEW:
-    await message.reply_text(
+    sent = await message.reply_text(
       "You're already in the queue. An admin will get to you — "
       "tagging again won't speed it up.")
+    _schedule_pair(message, sent, REMINDER_DELETE_SECONDS)
     return
 
   if status == db.STATUS_AWAITING_DM:
-    await message.reply_text(
+    sent = await message.reply_text(
       "You've already been approved. Tap below to register with me.",
       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
         "Start registration",
         url=f"https://t.me/{context.bot.username}?start=kyc")]]))
+    _schedule_pair(message, sent, REMINDER_DELETE_SECONDS)
     return
 
   if status in (db.STATUS_KYC_IN_PROGRESS, db.STATUS_PENDING_ACCESS,
                 db.STATUS_ACTIVE, db.STATUS_DECLINED):
-    await message.reply_text(
+    sent = await message.reply_text(
       "You're already past this stage — message me directly and I'll "
       "tell you where you stand.")
+    _schedule_pair(message, sent, REMINDER_DELETE_SECONDS)
     return
 
   # --- the main path: pending_summary ---
@@ -213,9 +211,10 @@ async def send_summary_card(bot, app_id, observed_seconds):
   name = f"{member['first_name'] or ''} {member['last_name'] or ''}".strip()
 
   if observed_seconds is None:
-    timing = "⏱ Time in group UNKNOWN — joined before the bot. Use your judgement."
+    timing = ("⏱ Time in group UNKNOWN — joined before the bot. "
+              "Use your judgement.")
   else:
-    timing = f"⏱ In group {int(observed_seconds // 86400)} days (bot-observed)"
+    timing = f"⏱ In group {_humanise(observed_seconds)} (bot-observed)"
 
   text = (
     "INDUCTION REQUEST — awaiting review\n\n"
@@ -271,6 +270,7 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
   member = db.get_member(user_id)
   name = member["first_name"] or "there"
 
+  # Remove the member's post so the correct tag list isn't left on display.
   try:
     await context.bot.delete_message(app["source_chat_id"],
                                      app["source_message_id"])
@@ -309,7 +309,11 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
 
 # ----- 5. sweep deletions ------------------------------------------------
 async def sweep_deletions(context: ContextTypes.DEFAULT_TYPE):
-  for row in db.due_deletions():
+  rows = db.due_deletions()
+  if not rows:
+    return
+  logger.info("Sweeping %d scheduled deletion(s)", len(rows))
+  for row in rows:
     try:
       await context.bot.delete_message(row["chat_id"], row["message_id"])
     except Exception as e:

@@ -1,4 +1,3 @@
-from config import MAIN_GROUP_LINK
 # ===========================================================================
 # ----- APPROVED MESSAGE ------------------------------------------------------
 WELCOME_BODY = """Your registration has been approved.🎉 Welcome to Alpha Training Lab.
@@ -25,13 +24,6 @@ TAKING PART
 12. Let the admins know if you will be away for a long period.
 
 Moderation is handled by the ATL administration with the help of Alpha(@AlphaTrainingLab_bot). Breaking a rule brings a warning first. If the warning is ignored, it leads to removal."""
-
-WELCOME_APPROVED = f"""{WELCOME_BODY}
-
-You are now free to join the main group:
-{MAIN_GROUP_LINK}
-
-Welcome aboard."""
 
 
 def welcome_approved(invite_link=None):

@@ -40,6 +40,5 @@ LEADERSHIP_GROUP_ID = int(os.environ.get("LEADERSHIP_GROUP_ID") or 0)
 MAIN_GROUP_ID = int(os.environ.get("MAIN_GROUP_ID") or 0)
 
 # ----- Group links -------------------------
-MAIN_GROUP_LINK = os.environ["MAIN_GROUP"]
 INDUCTION_PINNED_URL = os.environ.get("INDUCTION_GROUP_PINNED_MESSAGE")
   
