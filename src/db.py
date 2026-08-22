@@ -3,10 +3,10 @@
 SQLite is the single source of truth. Excel is a generated export.
 """
 import sqlite3
-from pathlib import Path
 from contextlib import contextmanager
+
+from config import DB_PATH
 # ========================================
-DB_PATH = Path(__file__).resolve().parent.parent / "atl_bot.db"
 
 # --- status values ---------------------------------------------------
 STATUS_PENDING_SUMMARY = "pending_summary"

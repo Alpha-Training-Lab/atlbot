@@ -1,4 +1,3 @@
-"""Induction group listener: welcome, catch the tag, first admin gate."""
 import logging
 import re
 
@@ -14,10 +13,20 @@ from config import (
   WELCOME_DELETE_SECONDS, REMINDER_DELETE_SECONDS,
   REQUIRED_TAGS,
 )
+from src.llm import ask_alpha, classify_induction_intent
+from src.modules.alpha import _context_for
 # ===============================================================================
 logger = logging.getLogger(__name__)
 
+GROUP_REPLY_CONTEXT = (
+  "\n\nYou are replying publicly in the ATL induction group, not in a "
+  "private chat. Keep the reply short — three sentences at most. Never "
+  "post a group invite link here. If they need the induction material, "
+  f"point them to {INDUCTION_PINNED_URL}."
+)
 # ===============================================================================
+
+
 def _message_link(chat_id, message_id):
   """Supergroup message link: strip the -100 prefix."""
   return f"https://t.me/c/{str(chat_id).replace('-100', '', 1)}/{message_id}"
@@ -25,6 +34,7 @@ def _message_link(chat_id, message_id):
 
 def _mention(user_id, name):
   return f'<a href="tg://user?id={user_id}">{name}</a>'
+
 
 def _humanise(seconds):
   seconds = int(seconds)
@@ -47,6 +57,12 @@ def _missing_tags(text):
   return missing
 
 
+def _schedule_pair(user_message, bot_message, seconds):
+  """Delete both the member's post and Alpha's reply together."""
+  db.schedule_deletion(bot_message.chat_id, bot_message.message_id, seconds)
+  db.schedule_deletion(user_message.chat_id, user_message.message_id, seconds)
+
+
 # --- 1. welcome on join ------------------------------------------------
 async def handle_new_member(update, context: ContextTypes.DEFAULT_TYPE):
   message = update.message
@@ -59,21 +75,18 @@ async def handle_new_member(update, context: ContextTypes.DEFAULT_TYPE):
     db.upsert_member(user.id, username=user.username,
                      first_name=user.first_name, last_name=user.last_name)
     db.log_event(user.id, "joined_induction")   # bot WATCHED them arrive
-    await message.reply_text(
+
+    welcome = await message.reply_text(
       WELCOME_INDUCTION.format(name=user.first_name or "friend",
                                url=INDUCTION_PINNED_URL),
       disable_web_page_preview=True,
     )
-
-    sent = await message.reply_text(...)
-    db.schedule_deletion(sent.chat_id, sent.message_id,
+    db.schedule_deletion(welcome.chat_id, welcome.message_id,
                          WELCOME_DELETE_SECONDS)
-    
-    sent = await message.reply_text(...)
-    db.schedule_deletion(sent.chat_id, sent.message_id,
-                         REMINDER_DELETE_SECONDS)
 
 
+# --- not currently used: member_limit=1 links never raise join requests.
+# Kept as a safety net if the invite strategy ever changes.
 async def handle_join_request(update, context):
   req = update.chat_join_request
   user_id = req.from_user.id
@@ -88,12 +101,12 @@ async def handle_join_request(update, context):
 
 
 # --- 2. catch the tag --------------------------------------------------
-def _bot_was_tagged(message, bot_username):
-  if message.reply_to_message and message.reply_to_message.from_user:
-    if message.reply_to_message.from_user.is_bot:
-      return True
-  text = message.text or ""
-  return f"@{bot_username}".lower() in text.lower()
+def _bot_was_tagged(message, bot):
+  """True if THIS bot was mentioned or replied to."""
+  replied = message.reply_to_message
+  if replied and replied.from_user and replied.from_user.id == bot.id:
+    return True
+  return f"@{bot.username}".lower() in (message.text or "").lower()
 
 
 async def handle_induction_post(update, context: ContextTypes.DEFAULT_TYPE):
@@ -102,7 +115,7 @@ async def handle_induction_post(update, context: ContextTypes.DEFAULT_TYPE):
     return
   if not message.text:
     return
-  if not _bot_was_tagged(message, context.bot.username):
+  if not _bot_was_tagged(message, context.bot):
     return
 
   user = update.effective_user
@@ -112,50 +125,64 @@ async def handle_induction_post(update, context: ContextTypes.DEFAULT_TYPE):
   status = member["status"]
 
   if status == db.STATUS_PENDING_REVIEW:
-    await message.reply_text(
+    sent = await message.reply_text(
       "You're already in the queue. An admin will get to you — "
       "tagging again won't speed it up.")
+    _schedule_pair(message, sent, REMINDER_DELETE_SECONDS)
     return
 
   if status == db.STATUS_AWAITING_DM:
-    await message.reply_text(
+    sent = await message.reply_text(
       "You've already been approved. Tap below to register with me.",
       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
         "Start registration",
         url=f"https://t.me/{context.bot.username}?start=kyc")]]))
+    _schedule_pair(message, sent, REMINDER_DELETE_SECONDS)
     return
 
   if status in (db.STATUS_KYC_IN_PROGRESS, db.STATUS_PENDING_ACCESS,
                 db.STATUS_ACTIVE, db.STATUS_DECLINED):
-    await message.reply_text(
+    sent = await message.reply_text(
       "You're already past this stage — message me directly and I'll "
       "tell you where you stand.")
+    _schedule_pair(message, sent, REMINDER_DELETE_SECONDS)
     return
 
   # --- the main path: pending_summary ---
+  missing = _missing_tags(message.text)
+  intent = "onboarding"
+  if missing:
+    intent = await classify_induction_intent(message.text)
+
+  if intent == "question":
+    reply = await ask_alpha(
+      message.text,
+      context_note=_context_for(member) + GROUP_REPLY_CONTEXT,
+    )
+    sent = await message.reply_text(reply, disable_web_page_preview=True)
+    _schedule_pair(message, sent, REMINDER_DELETE_SECONDS)
+    return
+
+  # --- onboarding intent from here ---
   observed = db.seconds_since_last_event(user.id, "joined_induction")
 
   if observed is not None and observed < MIN_INDUCTION_SECONDS:
     remaining = MIN_INDUCTION_SECONDS - observed
-    await message.reply_text(
+    sent = await message.reply_text(
       f"Thanks {user.first_name or ''} — but you joined recently. "
       f"Members spend at least {_humanise(MIN_INDUCTION_SECONDS)} on the "
       f"induction material. Come back in about {_humanise(remaining)} "
       "and tag me again.")
+    _schedule_pair(message, sent, REMINDER_DELETE_SECONDS)
     return
 
-  missing = _missing_tags(message.text)
   if missing:
     db.log_event(user.id, "induction_post_incomplete")
     sent = await message.reply_text(
-      INDUCTION_POST_INCOMPLETE.format(
-        name=user.first_name or "",
-        url=INDUCTION_PINNED_URL,
-      ),
-      disable_web_page_preview=True,
-    )
-    db.schedule_deletion(sent.chat_id, sent.message_id,
-                         REMINDER_DELETE_SECONDS)
+      INDUCTION_POST_INCOMPLETE.format(name=user.first_name or "",
+                                       url=INDUCTION_PINNED_URL),
+      disable_web_page_preview=True)
+    _schedule_pair(message, sent, REMINDER_DELETE_SECONDS)
     return
 
   app_id = db.create_application(
@@ -165,10 +192,12 @@ async def handle_induction_post(update, context: ContextTypes.DEFAULT_TYPE):
   )
   db.set_status(user.id, db.STATUS_PENDING_REVIEW)
 
-  await message.reply_text(
+  sent = await message.reply_text(
     "Got it — thank you. Your request has gone to the onboarding team. "
     "They'll review it when they next check, and I'll post here once "
     "there's a decision. No need to message anyone in the meantime.")
+  # Alpha's ack goes on a timer; the member's post waits for the decision.
+  db.schedule_deletion(sent.chat_id, sent.message_id, WELCOME_DELETE_SECONDS)
 
   await send_summary_card(context.bot, app_id, observed)
 
@@ -182,19 +211,18 @@ async def send_summary_card(bot, app_id, observed_seconds):
   name = f"{member['first_name'] or ''} {member['last_name'] or ''}".strip()
 
   if observed_seconds is None:
-    timing = "⏱ Time in group UNKNOWN — joined before the bot. Use your judgement."
+    timing = ("⏱ Time in group UNKNOWN — joined before the bot. "
+              "Use your judgement.")
   else:
-    timing = f"⏱ In group {int(observed_seconds // 86400)} days (bot-observed)"
-
-  body = (app["summary_text"] or "")[:1500]
+    timing = f"⏱ In group {_humanise(observed_seconds)} (bot-observed)"
 
   text = (
     "INDUCTION REQUEST — awaiting review\n\n"
     f"Telegram: {name} {handle}\n"
     f"User ID: {app['user_id']}\n"
     f"{timing}\n\n"
-    f"What they posted:\n{body}\n\n"
-    f"Original: {_message_link(app['source_chat_id'], app['source_message_id'])}"
+    f"Read their post: "
+    f"{_message_link(app['source_chat_id'], app['source_message_id'])}"
   )
 
   await bot.send_message(
@@ -242,6 +270,14 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
   member = db.get_member(user_id)
   name = member["first_name"] or "there"
 
+  # Remove the member's post so the correct tag list isn't left on display.
+  try:
+    await context.bot.delete_message(app["source_chat_id"],
+                                     app["source_message_id"])
+  except Exception as e:
+    logger.warning("Could not delete induction post %s: %s",
+                   app["source_message_id"], e)
+
   if action == "approve":
     db.set_status(user_id, db.STATUS_AWAITING_DM, actor_user_id=admin.id)
     await query.edit_message_text(
@@ -273,12 +309,14 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
 
 # ----- 5. sweep deletions ------------------------------------------------
 async def sweep_deletions(context: ContextTypes.DEFAULT_TYPE):
-  for row in db.due_deletions():
+  rows = db.due_deletions()
+  if not rows:
+    return
+  logger.info("Sweeping %d scheduled deletion(s)", len(rows))
+  for row in rows:
     try:
       await context.bot.delete_message(row["chat_id"], row["message_id"])
     except Exception as e:
       logger.warning("Could not delete %s in %s: %s",
                      row["message_id"], row["chat_id"], e)
     db.clear_deletion(row["id"])   # clear either way — don't retry forever
-
-
