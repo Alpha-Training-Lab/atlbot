@@ -21,6 +21,7 @@ env/
 
 # Database
 *.db
+*.db.*
 *.sqlite3
 *.csv
 
