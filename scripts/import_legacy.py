@@ -33,8 +33,7 @@ sys.path.insert(0, str(ROOT))
 from src import db  # noqa: E402
 from src.kyc_fields import field_by_key  # noqa: E402
 from src.validators import validate  # noqa: E402
-# ========================================================================
-
+# ============================================================================
 # Spreadsheet header (lowercased) -> KYC field_key. Every other column is ignored.
 SIMPLE_COLUMNS = {
   "email": "email",
@@ -62,7 +61,8 @@ _USERNAME_RE = re.compile(r"^[a-z0-9_]{5,32}$")
 _SCI_RE = re.compile(r"^\d(\.\d+)?e\+\d+$", re.IGNORECASE)   # 2.34803E+12
 _EXTRA_DATE_FORMATS = ["%B %d, %Y", "%b %d, %Y", "%B %d %Y", "%b %d %Y"]
 _SLASH_DATE_RE = re.compile(r"^(\d{1,2})([/-])(\d{1,2})[/-](\d{2}|\d{4})$")
-# =========================================================================================
+# =============================================================================
+
 
 def norm_header(h):
   return " ".join(str(h or "").split()).lower()
@@ -291,7 +291,8 @@ def main():
 
 
 
-# ===========================
+
+# ============================================================================
 if __name__ == "__main__":
   try:
     main()
