@@ -89,6 +89,32 @@ CREATE TABLE IF NOT EXISTS scheduled_deletions (
 
 CREATE INDEX IF NOT EXISTS idx_deletions_due
   ON scheduled_deletions(delete_at);
+
+
+CREATE TABLE IF NOT EXISTS legacy_members (
+    legacy_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_row     INTEGER NOT NULL,
+    username_key   TEXT,
+    phone_key      TEXT,
+    linked_user_id INTEGER UNIQUE REFERENCES members(user_id),
+    linked_at      TEXT,
+    imported_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_legacy_username
+  ON legacy_members(username_key);
+
+CREATE INDEX IF NOT EXISTS idx_legacy_phone
+  ON legacy_members(phone_key);
+
+CREATE TABLE IF NOT EXISTS legacy_responses (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    legacy_id    INTEGER NOT NULL REFERENCES legacy_members(legacy_id),
+    field_key    TEXT NOT NULL,
+    value_text   TEXT,
+    needs_review INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(legacy_id, field_key)
+);
 """
 # ===============================================================
 
@@ -310,6 +336,7 @@ def due_deletions(limit=50):
 def clear_deletion(row_id):
   with get_conn() as conn:
     conn.execute("DELETE FROM scheduled_deletions WHERE id = ?", (row_id,))
+
 
 
 # ==================================================
