@@ -5,15 +5,18 @@ from telegram.ext import (
   Application,
   CallbackQueryHandler,
   ChatJoinRequestHandler,
+  ChatMemberHandler,
   CommandHandler,
   ContextTypes,
   MessageHandler,
   filters,
 )
 
-from config import BOT_TOKEN, INDUCTION_GROUP_ID, MAIN_GROUP_ID, ONBOARDING_GROUP_ID
+from config import (BOT_TOKEN, INDUCTION_GROUP_ID, MAIN_GROUP_ID,
+                    ONBOARDING_GROUP_ID, OWNER_USER_ID)
 from src import db
-from src.modules import admin, kyc, leadership, induction, legacy, profile, profile_edit
+from src.modules import (admin, kyc, leadership, induction, legacy, membership,
+                         profile, profile_edit)
 from src.modules.alpha import handle_alpha_message
 # =========================================================================================
 
@@ -92,7 +95,14 @@ def main() -> None:
     group=-1,
   )
   app.add_handler(
-    MessageHandler(filters.Chat(MAIN_GROUP_ID) | filters.ChatType.PRIVATE,
+    MessageHandler(filters.ChatType.PRIVATE & filters.Text([legacy.SKIP_BUTTON]),
+                   legacy.handle_skip),
+    group=-1,
+  )
+  app.add_handler(
+    # Join/leave notices aren't posts: a new joiner is handled by membership.py.
+    MessageHandler((filters.Chat(MAIN_GROUP_ID) & ~filters.StatusUpdate.ALL)
+                   | filters.ChatType.PRIVATE,
                    legacy.passive_link),
     group=-1,
   )
@@ -170,6 +180,16 @@ def main() -> None:
   )
 
   app.add_handler(ChatJoinRequestHandler(induction.handle_join_request), group=0)
+
+  # ----- group 0: main-group gatekeeping (joins, leaves, removals) --------
+  app.add_handler(
+    ChatMemberHandler(membership.handle_main_group_member_update,
+                      ChatMemberHandler.CHAT_MEMBER, chat_id=MAIN_GROUP_ID),
+    group=0,
+  )
+  if not OWNER_USER_ID:
+    logger.warning("OWNER_USER_ID is not set: unrecorded joins to the main "
+                   "group will NOT be reversed. Set it in .env.")
 
   # ----- group 1: Alpha LLM catch-all ----------------------------------
   app.add_handler(

@@ -98,7 +98,8 @@ async def handle_join_request(update, context):
     db.log_event(user_id, "joined_main_group")
   else:
     await context.bot.decline_chat_join_request(req.chat.id, user_id)
-    db.log_event(user_id, "join_request_declined")
+    if member is not None:   # the audit table needs a member row to point at
+      db.log_event(user_id, "join_request_declined")
 
 
 # --- 2. catch the tag --------------------------------------------------

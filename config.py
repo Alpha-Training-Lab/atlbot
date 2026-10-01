@@ -40,6 +40,15 @@ ONBOARDING_GROUP_ID = int(os.environ["ONBOARDING_GROUP_ID"] or 0)
 LEADERSHIP_GROUP_ID = int(os.environ.get("LEADERSHIP_GROUP_ID") or 0)
 MAIN_GROUP_ID = int(os.environ.get("MAIN_GROUP_ID") or 0)
 
+# ----- Main-group gatekeeping -------------------------
+# The one person allowed to add members without onboarding (the backdoor),
+# and who is alerted when anyone else's join is reversed. Unset = Alpha
+# does NOT remove anyone, so a missing value can't lock the owner out.
+OWNER_USER_ID = int(os.environ.get("OWNER_USER_ID") or 0)
+# Where removed joiners are pointed to start onboarding (e.g. the induction
+# group's invite link). Unset = they're told to contact an ATL admin.
+ONBOARDING_ENTRY_URL = os.environ.get("ONBOARDING_ENTRY_URL")
+
 # ----- Group links -------------------------
 INDUCTION_PINNED_URL = os.environ.get("INDUCTION_GROUP_PINNED_MESSAGE")
   

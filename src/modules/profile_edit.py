@@ -114,7 +114,7 @@ IN_EDIT = _InEditSession()
 
 async def show_menu(bot, user_id):
   if not profile.is_active(user_id):
-    await bot.send_message(user_id, profile.NOT_ACTIVE)
+    await profile.send_not_active(bot, user_id)
     return
   pending = {r["field_key"] for r in db.get_open_changes(user_id)}
   buttons = []
@@ -133,7 +133,7 @@ async def show_menu(bot, user_id):
 
 async def start_edit(bot, user_id, group_key):
   if not profile.is_active(user_id):
-    await bot.send_message(user_id, profile.NOT_ACTIVE)
+    await profile.send_not_active(bot, user_id)
     return
   group = _group(group_key)
   if group is None:

@@ -13,7 +13,8 @@ Two routes:
 import logging
 import re
 
-from telegram import KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
+                      ReplyKeyboardMarkup, ReplyKeyboardRemove, Update)
 from telegram.constants import ChatMemberStatus
 from telegram.error import TelegramError
 from telegram.ext import ApplicationHandlerStop, ContextTypes
@@ -26,12 +27,25 @@ logger = logging.getLogger(__name__)
 # ===========================================================================
 # ----- Messages -------------------------------------------------------------
 ASK_FOR_PHONE = (
-  "If you've been an ATL member for a while, I can find your existing record "
-  "so you don't have to register again.\n\n"
-  "Tap the button below to share your Telegram phone number. I'll use it "
-  "once to find your record, and I won't store it."
+  "If you were registered on the old ATL website, I can bring your details "
+  "over so you don't have to type them again.\n\n"
+  "Tap below to share your Telegram phone number. I'll use it once to find "
+  "your record, and I won't store it.\n\n"
+  "Never registered on the old website, or rather not share? Tap Skip."
 )
 SHARE_BUTTON = "📱 Share my number"
+SKIP_BUTTON = "⏭ Skip"
+IN_GROUP_NOT_ON_RECORD = ("I can see you're in the main ATL group, but I don't "
+                          "have your details on record yet. Let's fix that.")
+GROUP_PROMPT = ("Alpha doesn't have your ATL details on record yet. Tap below to "
+                "update them. It only takes a couple of minutes.")
+PROMPT_DELETE_SECONDS = 15 * 60   # the reply sits in a busy group: keep it brief
+PROMPT_EVERY_DAYS = 7             # at most one nudge per person per week
+ACTIVATED_NO_RECORD = (
+  "✅ You're in the main ATL group, so you're recognised as a member.\n\n"
+  "I couldn't find an old record for you, so your profile starts empty. "
+  "Tap Fill in missing details below to complete it."
+)
 LINKED = ("✅ Found you. You're recognised as an existing ATL member, "
           "so there's no need to go through registration.")
 ALREADY_LINKED = "✅ You're already recognised as an existing ATL member. Nothing more to do."
@@ -82,27 +96,47 @@ def _link(legacy_id, user, method):
 
 # ----- Route 1: passive username match ---------------------------------------
 async def passive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  """Group -1. Never replies and never stops later handlers, so Alpha and
-  KYC carry on as normal, just with the member already linked."""
+  """Group -1. Runs on main-group posts and DMs, before everything else.
+  Links people silently by username where it can. In the main group, anyone
+  still not on record gets a brief nudge to update their details. Never
+  stops later handlers, so Alpha and KYC carry on as normal."""
   user = update.effective_user
   chat = update.effective_chat
-  if user is None or chat is None or user.is_bot or not user.username:
+  if user is None or chat is None or user.is_bot:
     return
 
   checked = context.bot_data.setdefault(_CHECKED, set())
   if user.id in checked:
-    return   # one database check per person per bot restart, not per message
+    return   # one check per person per bot restart, not per message
   checked.add(user.id)
 
-  if db.is_legacy_linked(user.id):
+  member = db.get_member(user.id)
+  if member is not None and member["status"] == db.STATUS_ACTIVE:
     return
-  legacy_id = db.find_legacy_match("username_key", username_key(user.username))
-  if legacy_id is None:
+
+  if user.username and not db.is_legacy_linked(user.id):
+    legacy_id = db.find_legacy_match("username_key", username_key(user.username))
+    if legacy_id is not None and (
+        chat.id == MAIN_GROUP_ID or await _in_main_group(context.bot, user.id)):
+      if _link(legacy_id, user, "username"):
+        logger.info("Legacy member linked via username (legacy_id=%s)", legacy_id)
+        return
+
+  if chat.id == MAIN_GROUP_ID:
+    await _prompt_in_group(update, context)
+
+
+async def _prompt_in_group(update, context):
+  """Reply to a main-group post from someone not on record. Alpha can't DM
+  people who haven't started it, so the nudge has to be in the group."""
+  user = update.effective_user
+  if not db.should_prompt(user.id, PROMPT_EVERY_DAYS):
     return
-  if chat.id != MAIN_GROUP_ID and not await _in_main_group(context.bot, user.id):
-    return
-  if _link(legacy_id, user, "username"):
-    logger.info("Legacy member linked via username (legacy_id=%s)", legacy_id)
+  sent = await update.effective_message.reply_text(
+    GROUP_PROMPT, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+      "Update my details", url=f"https://t.me/{context.bot.username}?start=link")]]))
+  db.mark_prompted(user.id)
+  db.schedule_deletion(sent.chat_id, sent.message_id, PROMPT_DELETE_SECONDS)
 
 
 # ----- Route 2: one-tap phone match ------------------------------------------
@@ -120,13 +154,20 @@ async def handle_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
   if not await _in_main_group(context.bot, user.id):
     await message.reply_text(NOT_IN_MAIN_GROUP)
     return
+  await ask_for_phone(update, context)
 
+
+async def ask_for_phone(update, context, intro=None):
+  """Offer Share my number / Skip. Also used by Alpha when a main-group
+  member messages it without being on record."""
   context.user_data[_AWAITING] = True
   keyboard = ReplyKeyboardMarkup(
-    [[KeyboardButton(SHARE_BUTTON, request_contact=True)]],
+    [[KeyboardButton(SHARE_BUTTON, request_contact=True)],
+     [KeyboardButton(SKIP_BUTTON)]],
     resize_keyboard=True, one_time_keyboard=True,
   )
-  await message.reply_text(ASK_FOR_PHONE, reply_markup=keyboard)
+  text = f"{intro}\n\n{ASK_FOR_PHONE}" if intro else ASK_FOR_PHONE
+  await update.effective_message.reply_text(text, reply_markup=keyboard)
 
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -155,10 +196,35 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
       logger.info("Legacy member linked via phone (legacy_id=%s)", legacy_id)
       reply = LINKED
     else:
-      reply = NO_MATCH
+      reply = _activate_without_record(user, "phone, no match")
 
   await message.reply_text(reply, reply_markup=done)
-  if reply in (LINKED, ALREADY_LINKED):
+  if reply in (LINKED, ALREADY_LINKED, ACTIVATED_NO_RECORD):
     await profile.show_profile(context.bot, user.id)
   # Stop here: the phone number must not reach KYC or the LLM.
+  raise ApplicationHandlerStop
+
+
+def _activate_without_record(user, method):
+  if db.activate_main_group_member(user.id, user.username, user.first_name,
+                                   user.last_name, method):
+    logger.info("Main-group member activated without an old record")
+    return ACTIVATED_NO_RECORD
+  return NO_MATCH   # status needs a human (under review, declined, removed)
+
+
+async def handle_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  """Group -1, private chats: the member tapped Skip instead of sharing
+  their number. Only acts if they started the link flow."""
+  if not context.user_data.pop(_AWAITING, False):
+    return
+  user = update.effective_user
+  message = update.effective_message
+  if not await _in_main_group(context.bot, user.id):
+    reply = NOT_IN_MAIN_GROUP
+  else:
+    reply = _activate_without_record(user, "skip")
+  await message.reply_text(reply, reply_markup=ReplyKeyboardRemove())
+  if reply == ACTIVATED_NO_RECORD:
+    await profile.show_profile(context.bot, user.id)
   raise ApplicationHandlerStop

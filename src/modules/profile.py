@@ -28,7 +28,8 @@ MAX_ATTEMPTS = 3
 VIEW_DELETE_SECONDS = 10 * 60   # the profile view holds personal data
 
 # ----- Messages -------------------------------------------------------------
-NOT_ACTIVE = "Your profile becomes available once you're a full ATL member."
+NOT_ACTIVE = ("Your profile is for ATL members. If you're already in the main "
+              "ATL group, tap below so I can recognise you.")
 NOTHING_MISSING = "✅ Nothing is missing. Thank you."
 FILL_INTRO = ("Let's fill in your missing details, one at a time. "
               "Tap ⏸ Stop for now whenever you like and carry on later.")
@@ -94,9 +95,16 @@ IN_SESSION = _InProfileSession()
 
 
 # ----- View -------------------------------------------------------------------
+
+async def send_not_active(bot, user_id):
+  """Not active yet: say so, and offer the way in for existing members."""
+  await bot.send_message(user_id, NOT_ACTIVE, reply_markup=InlineKeyboardMarkup([[
+    InlineKeyboardButton("I'm already an ATL member",
+                         url=f"https://t.me/{bot.username}?start=link")]]))
+
 async def show_profile(bot, user_id):
   if not is_active(user_id):
-    await bot.send_message(user_id, NOT_ACTIVE)
+    await send_not_active(bot, user_id)
     return
 
   states = field_states(user_id)
@@ -157,7 +165,7 @@ async def _ask_current(bot, user_id):
 
 async def start_fill(bot, user_id):
   if not is_active(user_id):
-    await bot.send_message(user_id, NOT_ACTIVE)
+    await send_not_active(bot, user_id)
     return
   db.end_edit_session(user_id)   # one flow at a time; an unconfirmed edit is dropped
   keys = [f["key"] for f, _, s in field_states(user_id)

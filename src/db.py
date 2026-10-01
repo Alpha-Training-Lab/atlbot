@@ -159,6 +159,21 @@ CREATE INDEX IF NOT EXISTS idx_pending_card
 
 -- A member editing details already on file. draft holds the new values
 -- (JSON) until they confirm; nothing touches kyc_responses before that.
+-- The current one-time main-group invite for an approved member who isn't
+-- in the group, so repeat messages re-send it instead of minting new ones.
+CREATE TABLE IF NOT EXISTS main_group_invites (
+    user_id     INTEGER PRIMARY KEY REFERENCES members(user_id),
+    invite_link TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
+);
+
+-- When someone not on record was last asked, in the main group, to update
+-- their details. Keyed by Telegram id: they may have no members row yet.
+CREATE TABLE IF NOT EXISTS group_prompts (
+    user_id     INTEGER PRIMARY KEY,
+    prompted_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS edit_sessions (
     user_id    INTEGER PRIMARY KEY REFERENCES members(user_id),
     group_key  TEXT NOT NULL,
@@ -454,6 +469,44 @@ def is_legacy_linked(user_id):
     ).fetchone() is not None
 
 
+def _make_active(conn, user_id, username, first_name, last_name):
+  """Create or refresh a member and set them active (inside a transaction)."""
+  conn.execute(
+    """
+    INSERT INTO members (user_id, username, first_name, last_name, status)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      username   = COALESCE(excluded.username, members.username),
+      first_name = COALESCE(excluded.first_name, members.first_name),
+      last_name  = COALESCE(excluded.last_name, members.last_name),
+      status     = excluded.status,
+      updated_at = datetime('now')
+    """,
+    (user_id, username, first_name, last_name, STATUS_ACTIVE),
+  )
+
+
+def activate_main_group_member(user_id, username, first_name, last_name, method):
+  """Make a verified main-group member active when there's no spreadsheet
+  record to link. Being in the main group is proof of membership; their
+  profile simply starts empty. Returns False, changing nothing, if their
+  status is one a human should decide (under review, declined, removed)."""
+  with get_conn() as conn:
+    member = conn.execute(
+      "SELECT status FROM members WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    if member is not None and member["status"] not in _LEGACY_PROMOTABLE:
+      return False
+    _make_active(conn, user_id, username, first_name, last_name)
+    if member is None or member["status"] != STATUS_ACTIVE:
+      conn.execute(
+        "INSERT INTO member_events (user_id, event, note) VALUES (?, ?, ?)",
+        (user_id, f"status:{STATUS_ACTIVE}",
+         f"main-group member, no old record (via {method})"),
+      )
+  return True
+
+
 def link_legacy(legacy_id, user_id, username, first_name, last_name, method):
   """Claim a spreadsheet row for a Telegram user, in ONE transaction:
   create or refresh the member, set them active, copy their spreadsheet
@@ -477,19 +530,7 @@ def link_legacy(legacy_id, user_id, username, first_name, last_name, method):
     if member is not None and member["status"] not in _LEGACY_PROMOTABLE:
       return False
 
-    conn.execute(
-      """
-      INSERT INTO members (user_id, username, first_name, last_name, status)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(user_id) DO UPDATE SET
-        username   = COALESCE(excluded.username, members.username),
-        first_name = COALESCE(excluded.first_name, members.first_name),
-        last_name  = COALESCE(excluded.last_name, members.last_name),
-        status     = excluded.status,
-        updated_at = datetime('now')
-      """,
-      (user_id, username, first_name, last_name, STATUS_ACTIVE),
-    )
+    _make_active(conn, user_id, username, first_name, last_name)
     # Answers they've already given the bot win over the old spreadsheet.
     conn.execute(
       """
@@ -769,6 +810,72 @@ def end_edit_session(user_id):
 
 
 
+
+
+# --- main-group sync ---------------------------------------------------
+
+def activate_by_owner(user_id, username, first_name, last_name):
+  """The owner added this person to the main group directly: the one
+  sanctioned backdoor. Active whatever their previous status."""
+  with get_conn() as conn:
+    member = conn.execute(
+      "SELECT status FROM members WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    _make_active(conn, user_id, username, first_name, last_name)
+    if member is None or member["status"] != STATUS_ACTIVE:
+      conn.execute(
+        "INSERT INTO member_events (user_id, event, note) VALUES (?, ?, ?)",
+        (user_id, f"status:{STATUS_ACTIVE}", "added to the main group by the owner"),
+      )
+
+
+def get_invite(user_id):
+  """The member's stored invite link, if it has more than 5 minutes left."""
+  with get_conn() as conn:
+    row = conn.execute(
+      "SELECT invite_link FROM main_group_invites "
+      "WHERE user_id = ? AND expires_at > datetime('now', '+5 minutes')",
+      (user_id,),
+    ).fetchone()
+  return row["invite_link"] if row else None
+
+
+def save_invite(user_id, invite_link, seconds):
+  with get_conn() as conn:
+    conn.execute(
+      """
+      INSERT INTO main_group_invites (user_id, invite_link, expires_at)
+      VALUES (?, ?, datetime('now', ?))
+      ON CONFLICT(user_id) DO UPDATE SET
+        invite_link = excluded.invite_link, expires_at = excluded.expires_at
+      """,
+      (user_id, invite_link, f"+{int(seconds)} seconds"),
+    )
+
+
+def clear_invite(user_id):
+  """Called when they join: a one-use link is spent once used."""
+  with get_conn() as conn:
+    conn.execute("DELETE FROM main_group_invites WHERE user_id = ?", (user_id,))
+
+
+def should_prompt(user_id, every_days):
+  with get_conn() as conn:
+    row = conn.execute(
+      "SELECT 1 FROM group_prompts WHERE user_id = ? "
+      "AND prompted_at > datetime('now', ?)",
+      (user_id, f"-{int(every_days)} days"),
+    ).fetchone()
+  return row is None
+
+
+def mark_prompted(user_id):
+  with get_conn() as conn:
+    conn.execute(
+      "INSERT INTO group_prompts (user_id) VALUES (?) "
+      "ON CONFLICT(user_id) DO UPDATE SET prompted_at = datetime('now')",
+      (user_id,),
+    )
 
 # ==================================================
 if __name__ == "__main__":

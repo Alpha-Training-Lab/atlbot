@@ -98,7 +98,7 @@ def _reasons_from_mask(mask):
   return [r for i, r in enumerate(DECLINE_REASONS) if mask & (1 << i)]
 
 
-async def _personal_invite(bot, user_id):
+async def personal_invite(bot, user_id):
   link = await bot.create_chat_invite_link(
     chat_id=MAIN_GROUP_ID,
     name=f"member-{user_id}"[:32],
@@ -223,7 +223,7 @@ async def handle_access_decision(update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
       f"{query.message.text}\n\n✅ APPROVED by {admin_name}")
     try:
-      invite = await _personal_invite(context.bot, target_id)
+      invite = await personal_invite(context.bot, target_id)
     except Exception:
       logger.exception("Could not create invite for %s", target_id)
       invite = None
