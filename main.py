@@ -13,7 +13,7 @@ from telegram.ext import (
 
 from config import BOT_TOKEN, INDUCTION_GROUP_ID, MAIN_GROUP_ID, ONBOARDING_GROUP_ID
 from src import db
-from src.modules import admin, kyc, leadership, induction, legacy, profile
+from src.modules import admin, kyc, leadership, induction, legacy, profile, profile_edit
 from src.modules.alpha import handle_alpha_message
 # =========================================================================================
 
@@ -132,6 +132,20 @@ def main() -> None:
     CallbackQueryHandler(profile.handle_member_button, pattern=r"^pf:"), group=0)
   app.add_handler(
     CallbackQueryHandler(profile.handle_change_decision, pattern=r"^pc:"), group=0)
+
+  # ----- group 0: profile edits ----------------------------------------
+  # Same rule as above: before the KYC collector, and IN_EDIT keeps it from
+  # matching anyone who isn't part-way through an edit.
+  app.add_handler(
+    MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND
+                   & profile_edit.IN_EDIT,
+                   profile_edit.handle_edit_message),
+    group=0,
+  )
+  app.add_handler(
+    CallbackQueryHandler(profile_edit.handle_member_button, pattern=r"^pe:"), group=0)
+  app.add_handler(
+    CallbackQueryHandler(profile_edit.handle_edit_decision, pattern=r"^pa:"), group=0)
 
   # ----- group 0: KYC collector ----------------------------------------
   app.add_handler(

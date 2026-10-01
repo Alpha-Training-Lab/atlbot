@@ -43,7 +43,7 @@ FINISHED = ("That's everything for now ✅\n\nAnything that needs an admin "
 STOPPED = "Paused. Send /profile whenever you want to carry on."
 # =================================================================================
 # ----- Helpers ----------------------------------------------------------------
-def _pretty(field, row):
+def pretty_value(field, row):
   if row["file_ref"]:
     return "on file"
   value = row["value_text"] or "—"
@@ -56,7 +56,7 @@ def _pretty(field, row):
   return value
 
 
-def _field_states(user_id):
+def field_states(user_id):
   """[(field, row, state)] where state is ok / missing / review / pending."""
   answers = db.get_kyc_answers(user_id)
   pending = {r["field_key"] for r in db.get_open_changes(user_id)}
@@ -77,7 +77,7 @@ def _field_states(user_id):
   return states
 
 
-def _is_active(user_id):
+def is_active(user_id):
   member = db.get_member(user_id)
   return member is not None and member["status"] == db.STATUS_ACTIVE
 
@@ -95,15 +95,15 @@ IN_SESSION = _InProfileSession()
 
 # ----- View -------------------------------------------------------------------
 async def show_profile(bot, user_id):
-  if not _is_active(user_id):
+  if not is_active(user_id):
     await bot.send_message(user_id, NOT_ACTIVE)
     return
 
-  states = _field_states(user_id)
+  states = field_states(user_id)
   lines = ["👤 YOUR ATL PROFILE", ""]
   for field, row, state in states:
     if state == "ok":
-      lines.append(f"✅ {label(field)}: {_pretty(field, row)}")
+      lines.append(f"✅ {label(field)}: {pretty_value(field, row)}")
     elif state == "pending":
       lines.append(f"⏳ {label(field)}: waiting for admin approval")
     elif state == "review":
@@ -113,10 +113,12 @@ async def show_profile(bot, user_id):
 
   to_fill = sum(1 for _, _, s in states if s in ("missing", "review"))
   lines += ["", f"This message deletes itself in {VIEW_DELETE_SECONDS // 60} minutes."]
-  markup = None
+  rows = []
   if to_fill:
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton(
-      f"✏️ Fill in missing details ({to_fill})", callback_data="pf:fill")]])
+    rows.append([InlineKeyboardButton(
+      f"➕ Fill in missing details ({to_fill})", callback_data="pf:fill")])
+  rows.append([InlineKeyboardButton("✏️ Edit my details", callback_data="pe:menu")])
+  markup = InlineKeyboardMarkup(rows)
 
   sent = await bot.send_message(user_id, "\n".join(lines), reply_markup=markup)
   db.schedule_deletion(user_id, sent.message_id, VIEW_DELETE_SECONDS)
@@ -154,10 +156,11 @@ async def _ask_current(bot, user_id):
 
 
 async def start_fill(bot, user_id):
-  if not _is_active(user_id):
+  if not is_active(user_id):
     await bot.send_message(user_id, NOT_ACTIVE)
     return
-  keys = [f["key"] for f, _, s in _field_states(user_id)
+  db.end_edit_session(user_id)   # one flow at a time; an unconfirmed edit is dropped
+  keys = [f["key"] for f, _, s in field_states(user_id)
           if s in ("missing", "review")]
   if not keys:
     await bot.send_message(user_id, NOTHING_MISSING)
@@ -174,6 +177,13 @@ async def _finish(bot, user_id, text):
   await bot.send_message(user_id, text)
   if card_id:
     await _maybe_notify_member(bot, user_id, card_id)
+
+
+async def pause_fill(bot, user_id):
+  """Stop a fill session if one is running, e.g. when the member switches
+  to editing. Anything already sent for approval stays with the admins."""
+  if db.get_profile_session(user_id) is not None:
+    await _finish(bot, user_id, STOPPED)
 
 
 async def _submit(bot, user_id, field, value_text=None, file_ref=None):
@@ -257,7 +267,7 @@ async def handle_profile_message(update, context: ContextTypes.DEFAULT_TYPE):
     await _fail(bot, message, user.id, error)
     raise ApplicationHandlerStop
   if field["type"] == "day_month":
-    await message.reply_text(f"Got it: {_pretty(field, {'file_ref': None, 'value_text': cleaned})}.")
+    await message.reply_text(f"Got it: {pretty_value(field, {'file_ref': None, 'value_text': cleaned})}.")
   await _accept(bot, user.id, field, value_text=cleaned)
   raise ApplicationHandlerStop
 
@@ -316,7 +326,7 @@ def _build_card(user_id, changes):
   for c in changes:
     field = field_by_key(c["field_key"])
     name_ = label(field) if field else c["field_key"]
-    value = "📎 posted below" if c["file_ref"] else _pretty(field, c) if field else c["value_text"]
+    value = "📎 posted below" if c["file_ref"] else pretty_value(field, c) if field else c["value_text"]
     if c["decision"] == "approved":
       status = f"✅ approved by {c['decided_by_name']}"
     elif c["decision"] == "rejected":

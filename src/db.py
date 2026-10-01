@@ -2,6 +2,7 @@
 
 SQLite is the single source of truth. Excel is a generated export.
 """
+import json
 import sqlite3
 from contextlib import contextmanager
 
@@ -155,6 +156,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_one_open
 
 CREATE INDEX IF NOT EXISTS idx_pending_card
   ON pending_changes(card_message_id);
+
+-- A member editing details already on file. draft holds the new values
+-- (JSON) until they confirm; nothing touches kyc_responses before that.
+CREATE TABLE IF NOT EXISTS edit_sessions (
+    user_id    INTEGER PRIMARY KEY REFERENCES members(user_id),
+    group_key  TEXT NOT NULL,
+    position   INTEGER NOT NULL DEFAULT 0,
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    draft      TEXT NOT NULL DEFAULT '{{}}',
+    started_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 # ===============================================================
 
@@ -622,6 +634,23 @@ def get_card_changes(card_message_id):
     ).fetchall()
 
 
+def _apply_change(conn, row):
+  """Write an approved pending change into kyc_responses."""
+  conn.execute(
+    """
+    INSERT INTO kyc_responses
+      (user_id, field_key, value_text, file_ref, needs_review)
+    VALUES (?, ?, ?, ?, 0)
+    ON CONFLICT(user_id, field_key) DO UPDATE SET
+      value_text   = excluded.value_text,
+      file_ref     = excluded.file_ref,
+      needs_review = 0,
+      created_at   = datetime('now')
+    """,
+    (row["user_id"], row["field_key"], row["value_text"], row["file_ref"]),
+  )
+
+
 def decide_change(change_id, decision, admin_id, admin_name):
   """Approve or reject one held detail, in ONE transaction. Approving writes
   it into kyc_responses. The audit trail records which field and who
@@ -641,25 +670,102 @@ def decide_change(change_id, decision, admin_id, admin_name):
       "SELECT * FROM pending_changes WHERE id = ?", (change_id,)
     ).fetchone()
     if decision == "approved":
-      conn.execute(
-        """
-        INSERT INTO kyc_responses
-          (user_id, field_key, value_text, file_ref, needs_review)
-        VALUES (?, ?, ?, ?, 0)
-        ON CONFLICT(user_id, field_key) DO UPDATE SET
-          value_text   = excluded.value_text,
-          file_ref     = excluded.file_ref,
-          needs_review = 0,
-          created_at   = datetime('now')
-        """,
-        (row["user_id"], row["field_key"], row["value_text"], row["file_ref"]),
-      )
+      _apply_change(conn, row)
     conn.execute(
       "INSERT INTO member_events (user_id, event, actor_user_id, note) "
       "VALUES (?, ?, ?, ?)",
       (row["user_id"], f"profile_change_{decision}", admin_id, row["field_key"]),
     )
   return True
+
+
+def decide_card_changes(card_message_id, decision, admin_id, admin_name,
+                        reason=None):
+  """Approve or reject every undecided change on one card, in ONE
+  transaction, so a grouped edit (e.g. a whole ID) can never be half-applied.
+  Returns the rows decided; empty if the card was already decided."""
+  if decision not in ("approved", "rejected"):
+    raise ValueError(f"Unknown decision: {decision}")
+  with get_conn() as conn:
+    rows = conn.execute(
+      "SELECT * FROM pending_changes "
+      "WHERE card_message_id = ? AND decision IS NULL",
+      (card_message_id,),
+    ).fetchall()
+    for row in rows:
+      conn.execute(
+        "UPDATE pending_changes SET decision = ?, decided_by = ?, "
+        "decided_by_name = ?, decided_at = datetime('now') WHERE id = ?",
+        (decision, admin_id, admin_name, row["id"]),
+      )
+      if decision == "approved":
+        _apply_change(conn, row)
+      note = row["field_key"] + (f"; reason: {reason}" if reason else "")
+      conn.execute(
+        "INSERT INTO member_events (user_id, event, actor_user_id, note) "
+        "VALUES (?, ?, ?, ?)",
+        (row["user_id"], f"profile_change_{decision}", admin_id, note),
+      )
+  return rows
+
+
+# --- edit sessions ---------------------------------------------------
+
+def get_edit_session(user_id):
+  with get_conn() as conn:
+    return conn.execute(
+      "SELECT * FROM edit_sessions WHERE user_id = ?", (user_id,)
+    ).fetchone()
+
+
+def start_edit_session(user_id, group_key):
+  with get_conn() as conn:
+    conn.execute(
+      """
+      INSERT INTO edit_sessions (user_id, group_key) VALUES (?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        group_key  = excluded.group_key,
+        position   = 0,
+        attempts   = 0,
+        draft      = '{}',
+        started_at = datetime('now')
+      """,
+      (user_id, group_key),
+    )
+
+
+def save_edit_draft(user_id, field_key, value_text=None, file_ref=None):
+  """Hold one new value and move to the next field of the group."""
+  with get_conn() as conn:
+    row = conn.execute(
+      "SELECT draft FROM edit_sessions WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    if row is None:
+      return
+    draft = json.loads(row["draft"])
+    draft[field_key] = {"value_text": value_text, "file_ref": file_ref}
+    conn.execute(
+      "UPDATE edit_sessions SET draft = ?, position = position + 1, "
+      "attempts = 0 WHERE user_id = ?",
+      (json.dumps(draft), user_id),
+    )
+
+
+def bump_edit_attempts(user_id):
+  with get_conn() as conn:
+    conn.execute(
+      "UPDATE edit_sessions SET attempts = attempts + 1 WHERE user_id = ?",
+      (user_id,),
+    )
+    row = conn.execute(
+      "SELECT attempts FROM edit_sessions WHERE user_id = ?", (user_id,)
+    ).fetchone()
+  return row["attempts"] if row else 0
+
+
+def end_edit_session(user_id):
+  with get_conn() as conn:
+    conn.execute("DELETE FROM edit_sessions WHERE user_id = ?", (user_id,))
 
 
 
