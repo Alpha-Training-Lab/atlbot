@@ -17,6 +17,7 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
 from config import ONBOARDING_GROUP_ID
 from src import db
+from src.files import send_file
 from src.kyc_fields import active_fields, field_by_key, label, needs_approval
 from src.validators import validate
 
@@ -189,11 +190,15 @@ async def _submit(bot, user_id, field, value_text=None, file_ref=None):
                                     file_ref, card_id)
   if card_id:
     await _refresh_card(bot, card_id)
-    return
-  text, markup = _build_card(user_id, [db.get_change(change_id)])
-  sent = await bot.send_message(ONBOARDING_GROUP_ID, text, reply_markup=markup)
-  db.attach_change_to_card(change_id, sent.message_id)
-  db.set_profile_card(user_id, sent.message_id)
+  else:
+    text, markup = _build_card(user_id, [db.get_change(change_id)])
+    sent = await bot.send_message(ONBOARDING_GROUP_ID, text, reply_markup=markup)
+    card_id = sent.message_id
+    db.attach_change_to_card(change_id, card_id)
+    db.set_profile_card(user_id, card_id)
+  if file_ref:
+    await send_file(bot, ONBOARDING_GROUP_ID, file_ref,
+                    caption=f"{label(field)}, user {user_id}", reply_to=card_id)
 
 
 async def _accept(bot, user_id, field, value_text=None, file_ref=None):
@@ -308,12 +313,10 @@ def _build_card(user_id, changes):
            f"Telegram: {name} {handle}", f"User ID: {user_id}", ""]
 
   buttons = []
-  has_docs = False
   for c in changes:
     field = field_by_key(c["field_key"])
     name_ = label(field) if field else c["field_key"]
-    value = "[document]" if c["file_ref"] else _pretty(field, c) if field else c["value_text"]
-    has_docs = has_docs or bool(c["file_ref"])
+    value = "📎 posted below" if c["file_ref"] else _pretty(field, c) if field else c["value_text"]
     if c["decision"] == "approved":
       status = f"✅ approved by {c['decided_by_name']}"
     elif c["decision"] == "rejected":
@@ -326,8 +329,6 @@ def _build_card(user_id, changes):
       ])
     lines.append(f"{name_}: {value}  {status}")
 
-  if has_docs:
-    buttons.insert(0, [InlineKeyboardButton("📄 View documents", callback_data="pc:docs")])
   return "\n".join(lines), InlineKeyboardMarkup(buttons) if buttons else None
 
 
@@ -369,16 +370,8 @@ async def _maybe_notify_member(bot, user_id, card_message_id):
     logger.info("Member %s has blocked the bot; review result not delivered", user_id)
 
 
-async def _send_file(bot, chat_id, file_ref, caption):
-  try:
-    await bot.send_photo(chat_id, photo=file_ref, caption=caption)
-  except BadRequest:
-    # Uploaded as a file rather than a photo: Telegram won't send it as one.
-    await bot.send_document(chat_id, document=file_ref, caption=caption)
-
-
 async def handle_change_decision(update, context: ContextTypes.DEFAULT_TYPE):
-  """pc:docs, pc:a:<change_id>, pc:r:<change_id> on the onboarding card."""
+  """pc:a:<change_id>, pc:r:<change_id> on the onboarding card."""
   query = update.callback_query
   if query.message is None or query.message.chat.id != ONBOARDING_GROUP_ID:
     await query.answer()
@@ -389,23 +382,6 @@ async def handle_change_decision(update, context: ContextTypes.DEFAULT_TYPE):
   card_id = query.message.message_id
   parts = (query.data or "").split(":")
   action = parts[1] if len(parts) > 1 else ""
-
-  if action == "docs":
-    docs = [c for c in db.get_card_changes(card_id) if c["file_ref"]]
-    try:
-      for c in docs:
-        field = field_by_key(c["field_key"])
-        await _send_file(context.bot, admin.id, c["file_ref"],
-                         f"{label(field)}, user {c['user_id']}")
-    except Forbidden:
-      await query.answer("Open a chat with me first so I can send you the files.",
-                         show_alert=True)
-      return
-    if docs:
-      db.log_event(docs[0]["user_id"], "documents_viewed", actor_user_id=admin.id,
-                   note="profile approval")
-    await query.answer("Sent to your DM." if docs else "No documents on this card.")
-    return
 
   if action not in ("a", "r") or len(parts) != 3:
     await query.answer()

@@ -89,6 +89,14 @@ CREATE TABLE IF NOT EXISTS scheduled_deletions (
 CREATE INDEX IF NOT EXISTS idx_deletions_due
   ON scheduled_deletions(delete_at);
 
+-- The induction-group "you've been approved, tap to register" post, kept so
+-- it can be deleted the moment the member starts registering.
+CREATE TABLE IF NOT EXISTS registration_prompts (
+    user_id    INTEGER PRIMARY KEY REFERENCES members(user_id),
+    chat_id    INTEGER NOT NULL,
+    message_id INTEGER NOT NULL
+);
+
 
 CREATE TABLE IF NOT EXISTS legacy_members (
     legacy_id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -371,7 +379,35 @@ def clear_deletion(row_id):
     conn.execute("DELETE FROM scheduled_deletions WHERE id = ?", (row_id,))
 
 
+def save_registration_prompt(user_id, chat_id, message_id):
+  with get_conn() as conn:
+    conn.execute(
+      """
+      INSERT INTO registration_prompts (user_id, chat_id, message_id)
+      VALUES (?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        chat_id = excluded.chat_id, message_id = excluded.message_id
+      """,
+      (user_id, chat_id, message_id),
+    )
 
+
+def pop_registration_prompt(user_id):
+  """Return and forget the member's registration prompt, including its
+  timed fallback deletion, so the sweep doesn't try to delete it twice."""
+  with get_conn() as conn:
+    row = conn.execute(
+      "SELECT chat_id, message_id FROM registration_prompts WHERE user_id = ?",
+      (user_id,),
+    ).fetchone()
+    if row is None:
+      return None
+    conn.execute("DELETE FROM registration_prompts WHERE user_id = ?", (user_id,))
+    conn.execute(
+      "DELETE FROM scheduled_deletions WHERE chat_id = ? AND message_id = ?",
+      (row["chat_id"], row["message_id"]),
+    )
+  return row
 
 # --- legacy members ---------------------------------------------------
 # Statuses a legacy member may be promoted from. Anything else (an application

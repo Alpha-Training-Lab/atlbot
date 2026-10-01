@@ -26,6 +26,7 @@ MIN_INDUCTION_SECONDS = int(
 INVITE_TTL_SECONDS = 48 * 3600
 WELCOME_DELETE_SECONDS = 24 * 3600
 REMINDER_DELETE_SECONDS = 3 * 3600
+REGISTRATION_PROMPT_DELETE_SECONDS = 24 * 3600   # fallback if they never tap it
 REQUIRED_TAGS = [
   t.strip() for t in os.getenv(
     "REQUIRED_TAGS", "@ShemmyCypher,@Dr_evidence,@Epitome61"

@@ -8,13 +8,13 @@ from telegram import (
   InlineKeyboardButton,
   InlineKeyboardMarkup,
 )
-from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 
 from config import ONBOARDING_GROUP_ID, MAX_DECLINES, MAIN_GROUP_ID, INVITE_TTL_SECONDS
 from src import db
 from src.kyc_fields import active_fields
+from src.files import send_file
 from src.messages import welcome_approved
 # ===========================================================================
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def build_kyc_card(user_id):
     if row is None:
       value = "— not answered —"
     elif row["file_ref"]:
-      value = "[document uploaded]"
+      value = "📎 posted below"
     else:
       value = row["value_text"] or "—"
     flag = "  ⚠️ NEEDS REVIEW" if row and row["needs_review"] else ""
@@ -71,8 +71,6 @@ def build_kyc_card(user_id):
 
 def _decision_keyboard(user_id):
   return InlineKeyboardMarkup([
-    [InlineKeyboardButton("📄 View documents",
-                          callback_data=f"acc:docs:{user_id}")],
     [
       InlineKeyboardButton("✅ Approve", callback_data=f"acc:approve:{user_id}"),
       InlineKeyboardButton("❌ Decline", callback_data=f"acc:decline:{user_id}"),
@@ -112,11 +110,27 @@ async def _personal_invite(bot, user_id):
 
 
 async def send_access_request(bot, user_id):
-  await bot.send_message(
+  card = await bot.send_message(
     chat_id=ONBOARDING_GROUP_ID,
     text=build_kyc_card(user_id),
     reply_markup=_decision_keyboard(user_id),
   )
+  await post_documents(bot, user_id, card.message_id)
+
+
+async def post_documents(bot, user_id, card_message_id):
+  """Post the member's ID documents into the onboarding group, as replies
+  to their card. Returns how many were posted."""
+  answers = db.get_kyc_answers(user_id)
+  posted = 0
+  for field in active_fields():
+    row = answers.get(field["key"])
+    if row and row["file_ref"]:
+      await send_file(bot, ONBOARDING_GROUP_ID, row["file_ref"],
+                      caption=f"{_label(field)}, user {user_id}",
+                      reply_to=card_message_id)
+      posted += 1
+  return posted
 
 
 # --- decline ----------------------------------------------------------
@@ -187,24 +201,14 @@ async def handle_access_decision(update, context: ContextTypes.DEFAULT_TYPE):
   admin_id = query.from_user.id
   admin_name = query.from_user.first_name or str(admin_id)
 
-  # Documents can be viewed at any point, decided or not.
+  # Cards posted before documents moved into the group still carry a
+  # View documents button. Tapping it now posts the files under the card.
   if action == "docs":
-    answers = db.get_kyc_answers(target_id)
-    sent = 0
-    for field in active_fields():
-      row = answers.get(field["key"])
-      if row and row["file_ref"]:
-        caption = f"{field['key']} — user {target_id}"
-        try:
-          await context.bot.send_photo(
-            chat_id=admin_id, photo=row["file_ref"], caption=caption)
-        except BadRequest:
-          # Uploaded as a file, not a photo: Telegram won't send it as one.
-          await context.bot.send_document(
-            chat_id=admin_id, document=row["file_ref"], caption=caption)
-        sent += 1
-    db.log_event(target_id, "documents_viewed", actor_user_id=admin_id)
-    if sent == 0:
+    posted = await post_documents(context.bot, target_id,
+                                  query.message.message_id)
+    if posted:
+      db.log_event(target_id, "documents_posted", actor_user_id=admin_id)
+    else:
       await query.answer("No documents on file.", show_alert=True)
     return
 

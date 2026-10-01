@@ -59,9 +59,22 @@ async def send_current_field(bot, user_id):
   )
 
 
+async def _delete_registration_prompt(bot, user_id):
+  """The induction-group 'tap to register' post has done its job."""
+  prompt = db.pop_registration_prompt(user_id)
+  if prompt is None:
+    return
+  try:
+    await bot.delete_message(prompt["chat_id"], prompt["message_id"])
+  except Exception as e:
+    logger.warning("Could not delete registration prompt %s: %s",
+                   prompt["message_id"], e)
+
+
 async def start_kyc(bot, user_id):
   db.set_status(user_id, db.STATUS_KYC_IN_PROGRESS)
   db.advance_kyc(user_id, 0)
+  await _delete_registration_prompt(bot, user_id)
   await bot.send_message(
     chat_id=user_id,
     text=("Let's get you registered.\n\n"

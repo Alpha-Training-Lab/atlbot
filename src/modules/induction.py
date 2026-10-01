@@ -11,6 +11,7 @@ from config import (
   INDUCTION_GROUP_ID, ONBOARDING_GROUP_ID,
   INDUCTION_PINNED_URL, MIN_INDUCTION_SECONDS,
   WELCOME_DELETE_SECONDS, REMINDER_DELETE_SECONDS,
+  REGISTRATION_PROMPT_DELETE_SECONDS,
   REQUIRED_TAGS,
 )
 from src.llm import ask_alpha, classify_induction_intent
@@ -283,7 +284,7 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
       f"{query.message.text}\n\n✅ APPROVED by {admin_name}",
       disable_web_page_preview=True)
-    await context.bot.send_message(
+    sent = await context.bot.send_message(
       chat_id=INDUCTION_GROUP_ID,
       text=(f"{_mention(user_id, name)}, you've been approved. "
             "Tap below to register with me privately."),
@@ -292,12 +293,17 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
         "Start registration",
         url=f"https://t.me/{context.bot.username}?start=kyc")]]),
     )
+    # Deleted as soon as they start registering (kyc.start_kyc), or after
+    # the fallback period if they never tap it.
+    db.save_registration_prompt(user_id, sent.chat_id, sent.message_id)
+    db.schedule_deletion(sent.chat_id, sent.message_id,
+                         REGISTRATION_PROMPT_DELETE_SECONDS)
   else:
     db.set_status(user_id, db.STATUS_PENDING_SUMMARY, actor_user_id=admin.id)
     await query.edit_message_text(
       f"{query.message.text}\n\n❌ NOT YET — by {admin_name}",
       disable_web_page_preview=True)
-    await context.bot.send_message(
+    sent = await context.bot.send_message(
       chat_id=INDUCTION_GROUP_ID,
       text=(f"{_mention(user_id, name)}, please spend more time with the "
             f"induction material: {INDUCTION_PINNED_URL}\n\n"
@@ -305,6 +311,7 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
       parse_mode=ParseMode.HTML,
       disable_web_page_preview=True,
     )
+    db.schedule_deletion(sent.chat_id, sent.message_id, REMINDER_DELETE_SECONDS)
 
 
 # ----- 5. sweep deletions ------------------------------------------------
