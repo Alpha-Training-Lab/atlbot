@@ -30,16 +30,23 @@ STATUS_CONTEXT = {
     "This member has finished registration. The admin team is doing the "
     "final review. They only need to wait.",
   db.STATUS_ACTIVE:
-    "This member is fully approved and has group access.",
+    "This member is fully approved and has group access. If they want to "
+    "see, complete or update their personal details, tell them to tap the "
+    "My profile button below or send /profile. Never ask them to type "
+    "personal details to you in this chat.",
   db.STATUS_DECLINED:
     "This member's registration was declined. They can fix the issue and "
     "submit again using the button already sent to them.",
 }
 NO_RECORD = (
-  "This person has no record in the ATL database — they have not started "
-  "onboarding. Their first step is the induction group."
+  "This person has no record in the ATL database. If they say they are "
+  "already an ATL member, tell them to tap the 'I'm already an ATL member' "
+  "button below so you can find their record. Otherwise they have not "
+  "started onboarding, and their first step is the induction group."
 )
 # =============================================================================
+
+
 def _context_for(member):
   if member is None:
     return NO_RECORD
@@ -68,4 +75,12 @@ async def handle_alpha_message(
     markup = InlineKeyboardMarkup([[
       InlineKeyboardButton("Start registration", callback_data="rst:begin")
     ]])
+  elif member and member["status"] == db.STATUS_ACTIVE:
+    markup = InlineKeyboardMarkup([[
+      InlineKeyboardButton("👤 My profile", callback_data="pf:menu")
+    ]])
+  elif member is None:
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton(
+      "I'm already an ATL member",
+      url=f"https://t.me/{context.bot.username}?start=link")]])
   await message.reply_text(reply, reply_markup=markup)

@@ -8,6 +8,7 @@ from telegram import (
   InlineKeyboardButton,
   InlineKeyboardMarkup,
 )
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 
@@ -193,11 +194,14 @@ async def handle_access_decision(update, context: ContextTypes.DEFAULT_TYPE):
     for field in active_fields():
       row = answers.get(field["key"])
       if row and row["file_ref"]:
-        await context.bot.send_photo(
-          chat_id=admin_id,
-          photo=row["file_ref"],
-          caption=f"{field['key']} — user {target_id}",
-        )
+        caption = f"{field['key']} — user {target_id}"
+        try:
+          await context.bot.send_photo(
+            chat_id=admin_id, photo=row["file_ref"], caption=caption)
+        except BadRequest:
+          # Uploaded as a file, not a photo: Telegram won't send it as one.
+          await context.bot.send_document(
+            chat_id=admin_id, document=row["file_ref"], caption=caption)
         sent += 1
     db.log_event(target_id, "documents_viewed", actor_user_id=admin_id)
     if sent == 0:
@@ -296,4 +300,3 @@ async def handle_decline_reason(update, context: ContextTypes.DEFAULT_TYPE):
   await message.reply_text(
     "Decline recorded and the member has been told." if ok
     else "That member has already been decided.")
-

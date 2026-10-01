@@ -13,7 +13,7 @@ from telegram.ext import (
 
 from config import BOT_TOKEN, INDUCTION_GROUP_ID, MAIN_GROUP_ID, ONBOARDING_GROUP_ID
 from src import db
-from src.modules import admin, kyc, leadership, induction, legacy
+from src.modules import admin, kyc, leadership, induction, legacy, profile
 from src.modules.alpha import handle_alpha_message
 # =========================================================================================
 
@@ -37,6 +37,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
   if payload == "link":
     await legacy.handle_link_start(update, context)
+    return
+
+  member = db.get_member(update.effective_user.id)
+  if member is not None and member["status"] == db.STATUS_ACTIVE:
+    await profile.show_profile(context.bot, update.effective_user.id)
     return
 
   await update.message.reply_text(
@@ -96,6 +101,7 @@ def main() -> None:
   app.add_handler(CommandHandler("start", start), group=0)
   app.add_handler(CommandHandler("chatid", chat_id), group=0)
   app.add_handler(CommandHandler("kyc", cmd_kyc), group=0)   # TEMPORARY
+  app.add_handler(CommandHandler("profile", profile.cmd_profile), group=0)
 
   # ----- group 0: induction group --------------------------------------
   app.add_handler(
@@ -111,6 +117,21 @@ def main() -> None:
   app.add_handler(
     CallbackQueryHandler(induction.handle_induction_decision,
                          pattern=r"^ind:"), group=0)
+
+  # ----- group 0: profile collector ------------------------------------
+  # Must come before the KYC collector: within a group only the first
+  # matching handler runs, and IN_SESSION makes this one match only for
+  # members part-way through filling their profile.
+  app.add_handler(
+    MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND
+                   & profile.IN_SESSION,
+                   profile.handle_profile_message),
+    group=0,
+  )
+  app.add_handler(
+    CallbackQueryHandler(profile.handle_member_button, pattern=r"^pf:"), group=0)
+  app.add_handler(
+    CallbackQueryHandler(profile.handle_change_decision, pattern=r"^pc:"), group=0)
 
   # ----- group 0: KYC collector ----------------------------------------
   app.add_handler(

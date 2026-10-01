@@ -2,23 +2,31 @@
 
 Adding a field = add a dict here. Removing = set "active": False
 (keeps answers already collected). No schema migration either way.
+
+"edit" controls the member's profile:
+  "self"     - saved as soon as the member types it
+  "approval" - held until an admin approves it (identity and vouch details)
+A field with no "edit" key is treated as "approval", the safe default.
 """
 
 KYC_FIELDS = [
     {
         "key": "full_name",
+        "label": "Full name", "edit": "approval",
         "prompt": "What is your full name, exactly as it appears on your ID?",
         "type": "text",
         "required": True, "active": True, "order": 10,
     },
     {
         "key": "email",
+        "label": "Email", "edit": "self",
         "prompt": "What's your email address?",
         "type": "email",
         "required": True, "active": True, "order": 20,
     },
     {
         "key": "newsletter_opt_in",
+        "label": "Newsletter", "edit": "self",
         "prompt": "Would you like to receive the ATL newsletter by email?",
         "type": "choice",
         "options": ["Yes, sign me up", "No thanks"],
@@ -26,12 +34,14 @@ KYC_FIELDS = [
     },
     {
         "key": "mobile",
+        "label": "Phone number", "edit": "self",
         "prompt": "What's your phone number? Include the country code, e.g. +234...",
         "type": "phone",
         "required": True, "active": True, "order": 30,
     },
     {
         "key": "birthday",
+        "label": "Birthday", "edit": "approval",
         "prompt": "What day and month is your birthday? e.g. 14 March\n"
                   "(We only keep the day and month — never the year.)",
         "type": "day_month",
@@ -39,6 +49,7 @@ KYC_FIELDS = [
     },
     {
         "key": "gender",
+        "label": "Gender", "edit": "self",
         "prompt": "What is your gender?",
         "type": "choice",
         "options": ["Male", "Female", "Prefer not to say"],
@@ -46,42 +57,49 @@ KYC_FIELDS = [
     },
     {
         "key": "country_of_residence",
+        "label": "Country", "edit": "self",
         "prompt": "Which country do you currently live in?",
         "type": "text",
         "required": True, "active": True, "order": 60,
     },
     {
         "key": "state",
+        "label": "State / region", "edit": "self",
         "prompt": "Which state or region?",
         "type": "text",
         "required": True, "active": True, "order": 70,
     },
     {
         "key": "address",
+        "label": "Address", "edit": "self",
         "prompt": "What is your residential address?",
         "type": "text",
         "required": True, "active": True, "order": 80,
     },
     {
         "key": "referral_source",
+        "label": "How you heard about ATL", "edit": "self",
         "prompt": "How did you hear about ATL?",
         "type": "text",
         "required": True, "active": True, "order": 90,
     },
     {
         "key": "vouch_name",
+        "label": "Vouch's name", "edit": "approval",
         "prompt": "What is the full name of the person who introduced you to ATL?",
         "type": "text",
         "required": True, "active": True, "order": 100,
     },
     {
         "key": "vouch_username",
+        "label": "Vouch's username", "edit": "approval",
         "prompt": "What is their Telegram username? e.g. @username",
         "type": "text",
         "required": True, "active": True, "order": 110,
     },
     {
         "key": "id_type",
+        "label": "ID type", "edit": "approval",
         "prompt": "Which ID will you be uploading?",
         "type": "choice",
         "options": ["NIN Slip", "International Passport",
@@ -90,12 +108,14 @@ KYC_FIELDS = [
     },
     {
         "key": "id_document",
+        "label": "ID document", "edit": "approval",
         "prompt": "Please upload a clear photo of that ID.",
         "type": "document",
         "required": True, "active": True, "order": 130,
     },
     {
         "key": "id_with_face",
+        "label": "Photo holding ID", "edit": "approval",
         "prompt": "Now upload a photo of yourself holding that same ID.",
         "type": "document",
         "required": True, "active": True, "order": 140,
@@ -120,3 +140,11 @@ def field_by_key(key):
 
 def total_active():
     return len(active_fields())
+
+
+def needs_approval(field):
+    return field.get("edit", "approval") != "self"
+
+
+def label(field):
+    return field.get("label") or field["key"].replace("_", " ").capitalize()

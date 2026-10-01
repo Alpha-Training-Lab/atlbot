@@ -20,6 +20,7 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 from config import MAIN_GROUP_ID
 from src import db
+from src.modules import profile
 
 logger = logging.getLogger(__name__)
 # ===========================================================================
@@ -59,7 +60,6 @@ def phone_key(raw):
 
 
 # ----- Helpers --------------------------------------------------------------
-
 async def _in_main_group(bot, user_id):
   """A DM proves nothing about membership, so ask Telegram."""
   if not MAIN_GROUP_ID:
@@ -81,7 +81,6 @@ def _link(legacy_id, user, method):
 
 
 # ----- Route 1: passive username match ---------------------------------------
-
 async def passive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
   """Group -1. Never replies and never stops later handlers, so Alpha and
   KYC carry on as normal, just with the member already linked."""
@@ -107,14 +106,16 @@ async def passive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ----- Route 2: one-tap phone match ------------------------------------------
-
 async def handle_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
   """Called from /start when the payload is 'link'."""
   user = update.effective_user
   message = update.effective_message
 
-  if db.is_legacy_linked(user.id):   # passive_link may have just done it
-    await message.reply_text(ALREADY_LINKED)
+  member = db.get_member(user.id)
+  if member is not None and member["status"] == db.STATUS_ACTIVE:
+    # Linked already (perhaps by passive_link a moment ago), or a member who
+    # registered through the bot. Either way: straight to their profile.
+    await profile.show_profile(context.bot, user.id)
     return
   if not await _in_main_group(context.bot, user.id):
     await message.reply_text(NOT_IN_MAIN_GROUP)
@@ -157,5 +158,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
       reply = NO_MATCH
 
   await message.reply_text(reply, reply_markup=done)
+  if reply in (LINKED, ALREADY_LINKED):
+    await profile.show_profile(context.bot, user.id)
   # Stop here: the phone number must not reach KYC or the LLM.
   raise ApplicationHandlerStop

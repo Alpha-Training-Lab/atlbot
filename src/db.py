@@ -114,6 +114,39 @@ CREATE TABLE IF NOT EXISTS legacy_responses (
     needs_review INTEGER NOT NULL DEFAULT 0,
     UNIQUE(legacy_id, field_key)
 );
+
+-- A member filling in missing profile details. Kept apart from members.status
+-- so an active member who stops halfway is still active.
+CREATE TABLE IF NOT EXISTS profile_sessions (
+    user_id         INTEGER PRIMARY KEY REFERENCES members(user_id),
+    field_keys      TEXT NOT NULL,
+    position        INTEGER NOT NULL DEFAULT 0,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    card_message_id INTEGER,
+    started_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Profile details held until an admin approves them.
+CREATE TABLE IF NOT EXISTS pending_changes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL REFERENCES members(user_id),
+    field_key       TEXT NOT NULL,
+    value_text      TEXT,
+    file_ref        TEXT,
+    card_message_id INTEGER,
+    requested_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    decision        TEXT CHECK (decision IN ('approved', 'rejected')),
+    decided_by      INTEGER,
+    decided_by_name TEXT,
+    decided_at      TEXT
+);
+
+-- At most one undecided request per member per field.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_one_open
+  ON pending_changes(user_id, field_key) WHERE decision IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_pending_card
+  ON pending_changes(card_message_id);
 """
 # ===============================================================
 
@@ -341,7 +374,6 @@ def clear_deletion(row_id):
 
 
 # --- legacy members ---------------------------------------------------
-
 # Statuses a legacy member may be promoted from. Anything else (an application
 # an admin is still deciding, a decline, a removal) is left for a human.
 _LEGACY_PROMOTABLE = (STATUS_PENDING_SUMMARY, STATUS_AWAITING_DM,
@@ -435,6 +467,164 @@ def link_legacy(legacy_id, user_id, username, first_name, last_name, method):
       (user_id, "legacy_linked", f"legacy_id={legacy_id}; via {method}"),
     )
   return True
+
+
+
+
+# --- profile sessions ------------------------------------------------
+def get_profile_session(user_id):
+  with get_conn() as conn:
+    return conn.execute(
+      "SELECT * FROM profile_sessions WHERE user_id = ?", (user_id,)
+    ).fetchone()
+
+
+def start_profile_session(user_id, field_keys):
+  """Start (or restart) a session that will ask these fields, in order."""
+  with get_conn() as conn:
+    conn.execute(
+      """
+      INSERT INTO profile_sessions (user_id, field_keys)
+      VALUES (?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        field_keys      = excluded.field_keys,
+        position        = 0,
+        attempts        = 0,
+        card_message_id = NULL,
+        started_at      = datetime('now')
+      """,
+      (user_id, ",".join(field_keys)),
+    )
+
+
+def advance_profile_session(user_id):
+  with get_conn() as conn:
+    conn.execute(
+      "UPDATE profile_sessions SET position = position + 1, attempts = 0 "
+      "WHERE user_id = ?",
+      (user_id,),
+    )
+
+
+def bump_profile_attempts(user_id):
+  with get_conn() as conn:
+    conn.execute(
+      "UPDATE profile_sessions SET attempts = attempts + 1 WHERE user_id = ?",
+      (user_id,),
+    )
+    row = conn.execute(
+      "SELECT attempts FROM profile_sessions WHERE user_id = ?", (user_id,)
+    ).fetchone()
+  return row["attempts"] if row else 0
+
+
+def set_profile_card(user_id, card_message_id):
+  with get_conn() as conn:
+    conn.execute(
+      "UPDATE profile_sessions SET card_message_id = ? WHERE user_id = ?",
+      (card_message_id, user_id),
+    )
+
+
+def end_profile_session(user_id):
+  with get_conn() as conn:
+    conn.execute("DELETE FROM profile_sessions WHERE user_id = ?", (user_id,))
+
+
+# --- pending changes -------------------------------------------------
+def add_pending_change(user_id, field_key, value_text=None, file_ref=None,
+                       card_message_id=None):
+  """Hold a detail for admin approval. Replaces any undecided request for
+  the same field. Returns the new row id."""
+  with get_conn() as conn:
+    conn.execute(
+      "DELETE FROM pending_changes "
+      "WHERE user_id = ? AND field_key = ? AND decision IS NULL",
+      (user_id, field_key),
+    )
+    cur = conn.execute(
+      "INSERT INTO pending_changes "
+      "(user_id, field_key, value_text, file_ref, card_message_id) "
+      "VALUES (?, ?, ?, ?, ?)",
+      (user_id, field_key, value_text, file_ref, card_message_id),
+    )
+    conn.execute(
+      "INSERT INTO member_events (user_id, event, note) VALUES (?, ?, ?)",
+      (user_id, "profile_change_requested", field_key),
+    )
+    return cur.lastrowid
+
+
+def attach_change_to_card(change_id, card_message_id):
+  with get_conn() as conn:
+    conn.execute(
+      "UPDATE pending_changes SET card_message_id = ? WHERE id = ?",
+      (card_message_id, change_id),
+    )
+
+
+def get_change(change_id):
+  with get_conn() as conn:
+    return conn.execute(
+      "SELECT * FROM pending_changes WHERE id = ?", (change_id,)
+    ).fetchone()
+
+
+def get_open_changes(user_id):
+  with get_conn() as conn:
+    return conn.execute(
+      "SELECT * FROM pending_changes WHERE user_id = ? AND decision IS NULL",
+      (user_id,),
+    ).fetchall()
+
+
+def get_card_changes(card_message_id):
+  with get_conn() as conn:
+    return conn.execute(
+      "SELECT * FROM pending_changes WHERE card_message_id = ? ORDER BY id",
+      (card_message_id,),
+    ).fetchall()
+
+
+def decide_change(change_id, decision, admin_id, admin_name):
+  """Approve or reject one held detail, in ONE transaction. Approving writes
+  it into kyc_responses. The audit trail records which field and who
+  decided, never the value itself. Returns False if already decided."""
+  if decision not in ("approved", "rejected"):
+    raise ValueError(f"Unknown decision: {decision}")
+  with get_conn() as conn:
+    cur = conn.execute(
+      "UPDATE pending_changes SET decision = ?, decided_by = ?, "
+      "decided_by_name = ?, decided_at = datetime('now') "
+      "WHERE id = ? AND decision IS NULL",
+      (decision, admin_id, admin_name, change_id),
+    )
+    if cur.rowcount == 0:
+      return False   # someone else got there first
+    row = conn.execute(
+      "SELECT * FROM pending_changes WHERE id = ?", (change_id,)
+    ).fetchone()
+    if decision == "approved":
+      conn.execute(
+        """
+        INSERT INTO kyc_responses
+          (user_id, field_key, value_text, file_ref, needs_review)
+        VALUES (?, ?, ?, ?, 0)
+        ON CONFLICT(user_id, field_key) DO UPDATE SET
+          value_text   = excluded.value_text,
+          file_ref     = excluded.file_ref,
+          needs_review = 0,
+          created_at   = datetime('now')
+        """,
+        (row["user_id"], row["field_key"], row["value_text"], row["file_ref"]),
+      )
+    conn.execute(
+      "INSERT INTO member_events (user_id, event, actor_user_id, note) "
+      "VALUES (?, ?, ?, ?)",
+      (row["user_id"], f"profile_change_{decision}", admin_id, row["field_key"]),
+    )
+  return True
+
 
 
 
