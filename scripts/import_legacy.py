@@ -20,6 +20,7 @@ so it is safe to share.
 """
 import argparse
 import csv
+import html
 import io
 import re
 import sys
@@ -33,7 +34,7 @@ sys.path.insert(0, str(ROOT))
 from src import db  # noqa: E402
 from src.kyc_fields import field_by_key  # noqa: E402
 from src.validators import validate  # noqa: E402
-# ============================================================================
+# ================================================================================
 # Spreadsheet header (lowercased) -> KYC field_key. Every other column is ignored.
 SIMPLE_COLUMNS = {
   "email": "email",
@@ -57,12 +58,17 @@ FIELD_ORDER = [
 # Placeholders people type into forms instead of leaving a cell empty.
 JUNK = {"", "-", "--", ".", "n/a", "na", "nil", "nill", "none", "null"}
 
+# Old website wording -> the bot's exact option text. Seen in the real file.
+ID_TYPE_ALIASES = {
+  "nin": "NIN Slip",
+  "driver license": "Driver's Licence",
+}
+
 _USERNAME_RE = re.compile(r"^[a-z0-9_]{5,32}$")
 _SCI_RE = re.compile(r"^\d(\.\d+)?e\+\d+$", re.IGNORECASE)   # 2.34803E+12
 _EXTRA_DATE_FORMATS = ["%B %d, %Y", "%b %d, %Y", "%B %d %Y", "%b %d %Y"]
 _SLASH_DATE_RE = re.compile(r"^(\d{1,2})([/-])(\d{1,2})[/-](\d{2}|\d{4})$")
-# =============================================================================
-
+# ================================================================================
 
 def norm_header(h):
   return " ".join(str(h or "").split()).lower()
@@ -70,7 +76,9 @@ def norm_header(h):
 
 def cell_text(value):
   """Turn a CSV cell into clean text."""
-  v = (value or "").strip()
+  # The old website stored "Voter's" as "Voter\&#39;s": undo both layers.
+  v = html.unescape(value or "")
+  v = v.replace("\\'", "'").replace('\\"', '"').strip()
   if re.fullmatch(r"\d+\.0", v):
     v = v[:-2]                               # "2348031234567.0" -> "2348031234567"
   return "" if v.lower() in JUNK else v
@@ -180,6 +188,8 @@ def build_records(path):
         continue
       if key == "birthday":
         raw = prep_birthday(raw, evidence)
+      if key == "id_type":
+        raw = ID_TYPE_ALIASES.get(raw.lower(), raw)
       ok, cleaned, _ = validate(field_by_key(key), raw)
       if ok:
         responses.append((key, cleaned, 0))
@@ -249,8 +259,11 @@ def print_report(records, stats, evidence, skipped_empty, malformed):
   print("BIRTHDAYS TYPED AS TEXT")
   print(f"  day-first evidence:      {evidence['day_first']}")
   print(f"  month-first evidence:    {evidence['month_first']}")
-  if evidence["month_first"]:
-    print("  !! Some dates look month-first. Do NOT commit. Send me this report.")
+  seen = evidence["day_first"] + evidence["month_first"]
+  if seen and evidence["month_first"] / seen > 0.05:
+    print("  !! Many dates look month-first. Do NOT commit. Send me this report.")
+  elif evidence["month_first"]:
+    print("  A few individual month-first dates: they fail to parse and are dropped.")
 
 
 def commit(records):
@@ -289,10 +302,7 @@ def main():
 
 
 
-
-
-
-# ============================================================================
+# ==========================================================================
 if __name__ == "__main__":
   try:
     main()
