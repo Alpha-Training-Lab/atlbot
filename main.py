@@ -11,11 +11,11 @@ from telegram.ext import (
   filters,
 )
 
-from config import BOT_TOKEN, INDUCTION_GROUP_ID, ONBOARDING_GROUP_ID
+from config import BOT_TOKEN, INDUCTION_GROUP_ID, MAIN_GROUP_ID, ONBOARDING_GROUP_ID
 from src import db
-from src.modules import admin, kyc, leadership, induction
+from src.modules import admin, kyc, leadership, induction, legacy
 from src.modules.alpha import handle_alpha_message
-# ========================================================
+# =========================================================================================
 
 logging.basicConfig(
   format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -33,6 +33,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db.upsert_member(user.id, username=user.username,
                      first_name=user.first_name, last_name=user.last_name)
     await kyc.handle_kyc_entry(context.bot, user.id)
+    return
+
+  if payload == "link":
+    await legacy.handle_link_start(update, context)
     return
 
   await update.message.reply_text(
@@ -72,6 +76,21 @@ def main() -> None:
   else:
     app.job_queue.run_repeating(induction.sweep_deletions,
                                 interval=300, first=10)
+
+  # ----- group -1: legacy member linking ------------------------------
+  # Runs before everything else, so by the time Alpha answers, a legacy
+  # member is already linked and active. Order matters within a group:
+  # only the first matching handler runs, so the contact handler goes first.
+  app.add_handler(
+    MessageHandler(filters.ChatType.PRIVATE & filters.CONTACT,
+                   legacy.handle_contact),
+    group=-1,
+  )
+  app.add_handler(
+    MessageHandler(filters.Chat(MAIN_GROUP_ID) | filters.ChatType.PRIVATE,
+                   legacy.passive_link),
+    group=-1,
+  )
 
   # ----- group 0: commands ---------------------------------------------
   app.add_handler(CommandHandler("start", start), group=0)
