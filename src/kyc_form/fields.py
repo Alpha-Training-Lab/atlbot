@@ -8,6 +8,7 @@ Adding a field = add a dict here. Removing = set "active": False
   "approval" - held until an admin approves it (identity and vouch details)
 A field with no "edit" key is treated as "approval", the safe default.
 """
+from datetime import datetime
 
 KYC_FIELDS = [
     {
@@ -138,13 +139,25 @@ def field_by_key(key):
     return None
 
 
-def total_active():
-    return len(active_fields())
-
-
 def needs_approval(field):
     return field.get("edit", "approval") != "self"
 
 
 def label(field):
     return field.get("label") or field["key"].replace("_", " ").capitalize()
+
+
+def display_value(field, value_text, file_ref=None):
+    """A stored answer as people should read it. Birthdays are stored as
+    MM-DD, which reads as the wrong date day-first ("07-05" is 5 July, not
+    7 May), so they're spelled out."""
+    if file_ref:
+        return "on file"
+    value = value_text or "—"
+    if field and field["type"] == "day_month" and len(value) == 5:
+        try:
+            dt = datetime.strptime(f"2000-{value}", "%Y-%m-%d")
+            return f"{dt.day} {dt.strftime('%B')}"
+        except ValueError:
+            pass
+    return value

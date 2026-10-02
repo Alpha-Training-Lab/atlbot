@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import boto3  # noqa: E402
-from config import DB_PATH  # noqa: E402  (importing config also loads .env)
+from src.config import DB_PATH  # noqa: E402  (importing config also loads .env)
 # ====================================================================
 
 BUCKET = os.environ["ATL_BACKUP_BUCKET"]

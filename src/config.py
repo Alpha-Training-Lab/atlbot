@@ -1,11 +1,19 @@
+"""Settings, read once from the environment (.env at the project root)."""
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 # ================================
-load_dotenv()
+# The project root, one level above src/. The database and resources/ live here.
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
-BASE_DIR = Path(__file__).resolve().parent
+
+def _int_env(name, default=0):
+  """An integer setting. Unset or blank means the default, never a crash."""
+  value = (os.environ.get(name) or "").strip()
+  return int(value) if value else default
+
 
 # ----- Token/API keys -------------------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -21,8 +29,7 @@ DB_PATH = Path(_db_path_env).expanduser() if _db_path_env else BASE_DIR / "atl_b
 MAX_DECLINES = 3
 COOLDOWN_SECONDS = 6 * 3600
 MIN_INDUCTION_DAYS = 10
-MIN_INDUCTION_SECONDS = int(
-  os.environ.get("MIN_INDUCTION_SECONDS", MIN_INDUCTION_DAYS * 86400))
+MIN_INDUCTION_SECONDS = _int_env("MIN_INDUCTION_SECONDS", MIN_INDUCTION_DAYS * 86400)
 INVITE_TTL_SECONDS = 48 * 3600
 WELCOME_DELETE_SECONDS = 24 * 3600
 REMINDER_DELETE_SECONDS = 3 * 3600
@@ -35,20 +42,18 @@ REQUIRED_TAGS = [
 
 
 # ----- Group IDs -------------------------
-INDUCTION_GROUP_ID = int(os.getenv("INDUCTION_GROUP_ID", "0"))
-ONBOARDING_GROUP_ID = int(os.environ["ONBOARDING_GROUP_ID"] or 0)
-LEADERSHIP_GROUP_ID = int(os.environ.get("LEADERSHIP_GROUP_ID") or 0)
-MAIN_GROUP_ID = int(os.environ.get("MAIN_GROUP_ID") or 0)
+INDUCTION_GROUP_ID = _int_env("INDUCTION_GROUP_ID")
+ONBOARDING_GROUP_ID = int(os.environ["ONBOARDING_GROUP_ID"] or 0)   # must be present
+MAIN_GROUP_ID = _int_env("MAIN_GROUP_ID")
 
 # ----- Main-group gatekeeping -------------------------
 # The one person allowed to add members without onboarding (the backdoor),
 # and who is alerted when anyone else's join is reversed. Unset = Alpha
 # does NOT remove anyone, so a missing value can't lock the owner out.
-OWNER_USER_ID = int(os.environ.get("OWNER_USER_ID") or 0)
+OWNER_USER_ID = _int_env("OWNER_USER_ID")
 # Where removed joiners are pointed to start onboarding (e.g. the induction
 # group's invite link). Unset = they're told to contact an ATL admin.
 ONBOARDING_ENTRY_URL = os.environ.get("ONBOARDING_ENTRY_URL")
 
 # ----- Group links -------------------------
 INDUCTION_PINNED_URL = os.environ.get("INDUCTION_GROUP_PINNED_MESSAGE")
-  

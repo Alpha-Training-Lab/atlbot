@@ -5,7 +5,7 @@ Rows go into holding tables (legacy_members + legacy_responses), NOT into
 members. A row only becomes a real member once it is linked to a Telegram
 account, which is the next step.
 
-Every value passes through src/validators.py, the same code that cleans
+Every value passes through src/kyc_form/validators.py, the same code that cleans
 live KYC answers, so imported data looks identical to data from new members.
 Values that fail validation are kept with needs_review=1, as KYC does.
 
@@ -32,8 +32,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src import db  # noqa: E402
-from src.kyc_fields import field_by_key  # noqa: E402
-from src.validators import validate  # noqa: E402
+from src.db import phone_key, username_key  # noqa: E402  (shared with live matching)
+from src.kyc_form import field_by_key, validate  # noqa: E402
 # ================================================================================
 # Spreadsheet header (lowercased) -> KYC field_key. Every other column is ignored.
 SIMPLE_COLUMNS = {
@@ -64,7 +64,6 @@ ID_TYPE_ALIASES = {
   "driver license": "Driver's Licence",
 }
 
-_USERNAME_RE = re.compile(r"^[a-z0-9_]{5,32}$")
 _SCI_RE = re.compile(r"^\d(\.\d+)?e\+\d+$", re.IGNORECASE)   # 2.34803E+12
 _EXTRA_DATE_FORMATS = ["%B %d, %Y", "%b %d, %Y", "%B %d %Y", "%b %d %Y"]
 _SLASH_DATE_RE = re.compile(r"^(\d{1,2})([/-])(\d{1,2})[/-](\d{2}|\d{4})$")
@@ -82,21 +81,6 @@ def cell_text(value):
   if re.fullmatch(r"\d+\.0", v):
     v = v[:-2]                               # "2348031234567.0" -> "2348031234567"
   return "" if v.lower() in JUNK else v
-
-
-def username_key(raw):
-  """'@Name', 'name', 't.me/name' -> 'name'. Anything invalid -> None."""
-  v = raw.strip().lower()
-  v = re.sub(r"^(https?://)?(www\.)?(t\.me|telegram\.me)/", "", v)
-  v = v.lstrip("@").strip()
-  return v if _USERNAME_RE.match(v) else None
-
-
-def phone_key(raw):
-  """Last 10 digits, so 08031234567, +2348031234567 and 8031234567
-  (Excel dropped the leading zero) all produce the same key."""
-  digits = re.sub(r"\D", "", raw)
-  return digits[-10:] if len(digits) >= 10 else None
 
 
 def prep_birthday(raw, evidence):

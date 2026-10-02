@@ -11,15 +11,15 @@ owner is told how they got in.
 """
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 from telegram.constants import ChatMemberStatus
 from telegram.error import Forbidden, TelegramError
 from telegram.ext import ContextTypes
 
-from config import (INVITE_TTL_SECONDS, MAIN_GROUP_ID, ONBOARDING_ENTRY_URL,
-                    OWNER_USER_ID)
 from src import db
-from src.modules import admin
+from src.config import (INVITE_TTL_SECONDS, MAIN_GROUP_ID, ONBOARDING_ENTRY_URL,
+                        OWNER_USER_ID)
 
 logger = logging.getLogger(__name__)
 # ===========================================================================
@@ -28,6 +28,13 @@ IN, OUT, BANNED, UNKNOWN = "in", "out", "banned", "unknown"
 CACHE_SECONDS = 10 * 60   # don't ask Telegram on every single message
 
 _cache = {}   # user_id -> (state, when)
+
+# ----- Messages -------------------------------------------------------------
+REMOVED_TEXT = ("Your ATL membership has been removed. If you think this is a "
+                "mistake, please contact an ATL admin.")
+REJOIN_TEXT = ("You're not in the main ATL group at the moment. Here's your "
+               "personal link to rejoin. It works once and expires in "
+               f"{INVITE_TTL_SECONDS // 3600} hours.")
 
 
 # ----- Is this person in the main group? ------------------------------------
@@ -44,13 +51,13 @@ def _state_of(chat_member):
   return OUT   # left
 
 
-async def main_group_state(bot, user_id):
+async def main_group_state(bot, user_id, use_cache=True):
   """IN, OUT, BANNED, or UNKNOWN if Telegram couldn't be asked. Callers
   must treat UNKNOWN as 'do nothing': never remove or invite on a guess."""
   if not MAIN_GROUP_ID:
     return UNKNOWN
   hit = _cache.get(user_id)
-  if hit and time.monotonic() - hit[1] < CACHE_SECONDS:
+  if use_cache and hit and time.monotonic() - hit[1] < CACHE_SECONDS:
     return hit[0]
   try:
     member = await bot.get_chat_member(MAIN_GROUP_ID, user_id)
@@ -62,14 +69,51 @@ async def main_group_state(bot, user_id):
   return state
 
 
+async def in_main_group(bot, user_id):
+  """Asks Telegram directly, never the cache: for moments that decide
+  something, like recognising someone as a member. A DM proves nothing
+  about membership."""
+  return await main_group_state(bot, user_id, use_cache=False) == IN
+
+
+# ----- Invite links -----------------------------------------------------------
+
+async def _personal_invite(bot, user_id):
+  link = await bot.create_chat_invite_link(
+    chat_id=MAIN_GROUP_ID,
+    name=f"member-{user_id}"[:32],
+    member_limit=1,
+    expire_date=datetime.now(timezone.utc)
+                + timedelta(seconds=INVITE_TTL_SECONDS),
+  )
+  return link.invite_link
+
+
 async def invite_for(bot, user_id):
   """A one-use invite to the main group, re-sending a still-valid one rather
   than minting a new link on every message."""
   link = db.get_invite(user_id)
   if link is None:
-    link = await admin.personal_invite(bot, user_id)
+    link = await _personal_invite(bot, user_id)
     db.save_invite(user_id, link, INVITE_TTL_SECONDS)
   return link
+
+
+# ----- Join requests -------------------------------------------------------
+# Not currently used: member_limit=1 links never raise join requests.
+# Kept as a safety net if the invite strategy ever changes.
+async def handle_join_request(update, context):
+  req = update.chat_join_request
+  user_id = req.from_user.id
+  member = db.get_member(user_id)
+
+  if member and member["status"] == db.STATUS_ACTIVE:
+    await context.bot.approve_chat_join_request(req.chat.id, user_id)
+    db.log_event(user_id, "joined_main_group")
+  else:
+    await context.bot.decline_chat_join_request(req.chat.id, user_id)
+    if member is not None:   # the audit table needs a member row to point at
+      db.log_event(user_id, "join_request_declined")
 
 
 # ----- Someone joins or leaves the main group -------------------------------

@@ -1,3 +1,5 @@
+"""The longer member-facing texts used during onboarding."""
+from src.config import INVITE_TTL_SECONDS
 # ===========================================================================
 # ----- APPROVED MESSAGE ------------------------------------------------------
 WELCOME_BODY = """Your registration has been approved.🎉 Welcome to Alpha Training Lab.
@@ -28,7 +30,7 @@ Moderation is handled by the ATL administration with the help of Alpha(@AlphaTra
 
 def welcome_approved(invite_link=None):
   tail = (f"You are now free to join the main group:\n{invite_link}\n\n"
-          "This link is yours alone and expires in 48 hours."
+          f"This link is yours alone and expires in {INVITE_TTL_SECONDS // 3600} hours."
           if invite_link else
           "An admin will send you your group link shortly.")
   return f"{WELCOME_BODY}\n\n{tail}\n\nWelcome aboard."

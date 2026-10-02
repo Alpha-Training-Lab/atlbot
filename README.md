@@ -1,46 +1,101 @@
 # Alpha — ATL Onboarding & Community Bot
 
-Alpha is the Telegram bot for **Alpha Training Lab (ATL)**. It runs the entire
-member journey end to end: welcoming new arrivals in the induction group,
-gating how long they must spend with the induction material, distinguishing
-a genuine question from a readiness signal, routing completed applications
-to admins for approval, walking approved members through identity
-verification (KYC), generating single-use invite links into the main group,
-keeping the induction group tidy via scheduled message deletion, and
-answering ad-hoc member questions with a Gemini-backed conversational
-assistant.
+Alpha is the Telegram bot for **Alpha Training Lab (ATL)**. It runs the
+member journey end to end:
 
-This document describes the system **as the code currently behaves**,
-including a couple of features that exist in the codebase but are not
-currently wired up (see [Known limitations](#known-limitations)).
+- **Onboarding new members:** welcoming arrivals in the induction group,
+  gating how long they must spend with the induction material, telling a
+  genuine question apart from a readiness signal, routing applications to
+  admins, walking approved members through identity verification (KYC), and
+  sending a single-use invite into the main group.
+- **Looking after existing members:** recognising members imported from the
+  old website, keeping the main group and the members database in step
+  (removing people who skipped onboarding), and letting members view,
+  complete and edit their profile, with admin approval for identity details.
+- **Answering questions:** a Gemini-backed assistant for anything else
+  members ask in a DM.
+
+This document describes the system **as the code currently behaves**.
 
 ## Contents
 
-- [Overview](#alpha--atl-onboarding--community-bot)
+- [Architecture](#architecture)
 - [The member lifecycle](#the-member-lifecycle)
 - [How it works](#how-it-works)
-  - [1. Induction](#1-induction-srcmodulesinductionpy)
-  - [2. Registration (KYC)](#2-registration-kyc-srcmoduleskycpy)
-  - [3. Admin access review](#3-admin-access-review-srcmodulesadminpy)
-  - [4. Alpha, the assistant](#4-alpha-the-assistant-srcmodulesalphapy-srcllmpy)
-  - [5. Scheduled message cleanup](#5-scheduled-message-cleanup)
-  - [6. Leadership reminders](#6-leadership-reminders-not-currently-wired-up)
+  - [Onboarding](#onboarding-srconboarding)
+  - [Existing members](#existing-members-srcmembers)
+  - [Alpha, the assistant](#alpha-the-assistant-srcassistant)
+  - [Scheduled message cleanup](#scheduled-message-cleanup-srccommoncleanuppy)
 - [Project structure](#project-structure)
 - [Getting started](#getting-started)
 - [Environment variables](#environment-variables)
 - [Running the bot](#running-the-bot)
 - [Database](#database)
 - [Bot commands](#bot-commands)
-- [Scheduled jobs](#scheduled-jobs)
-- [Development scripts](#development-scripts)
+- [Scripts](#scripts)
 - [Editing the KYC form](#editing-the-kyc-form)
 - [Known limitations](#known-limitations)
 
+## Architecture
+
+The code is organised by feature. Each feature is a package under `src/`,
+and they all share one data layer:
+
+```
+                        main.py  (wires every handler, in priority order)
+                           │
+        ┌──────────────────┼───────────────────────┐
+        ▼                  ▼                       ▼
+  src/onboarding/     src/members/           src/assistant/
+  new members         existing members       Alpha, the LLM
+        │                  │                       │
+        └──────┬───────────┴───────────┬───────────┘
+               ▼                       ▼
+         src/kyc_form/            src/common/
+         questions +              Telegram helpers,
+         validation               cleanup job
+               │                       │
+               └───────────┬───────────┘
+                           ▼
+                       src/db/    (SQLite: the single source of truth)
+                           │
+                     src/config.py (settings from .env)
+```
+
+Dependencies only point downwards in this picture, with two deliberate
+sideways links:
+
+- `onboarding` uses `members/main_group.py` for main-group invite links and
+  the "membership removed" message.
+- `assistant/chat.py` uses `members/` to keep the main group in step before
+  answering.
+
+`members/` never imports `onboarding/` or `assistant/`.
+
+**Who gets a message first.** `main.py` registers every handler. Telegram
+updates pass through handler groups in order: −1, then 0, then 1. Within a
+group, only the first matching handler runs, and a handler can stop an update
+from reaching later groups. So the order in `main.py` is the bot's priority
+list:
+
+| Group | Handler | Claims |
+|------:|---------|--------|
+| −1 | `members/legacy.py` | Shared phone numbers and Skip taps from the link flow (stopped there, so they never reach KYC or the LLM); silent username matching on main-group posts and DMs |
+| 0 | `src/commands.py`, `members/profile.py` | `/start`, `/profile`, `/kyc`, `/chatid` |
+| 0 | `onboarding/induction.py` | Everything in the induction group |
+| 0 | `members/profile.py`, `members/profile_edit.py` | DMs from a member part-way through filling in or editing their profile |
+| 0 | `onboarding/kyc.py` | DMs from a member part-way through registration |
+| 0 | `onboarding/access_review.py` | Admin buttons and typed decline reasons in the onboarding group |
+| 0 | `members/main_group.py` | Joins, leaves and removals in the main group |
+| 1 | `assistant/chat.py` | Any private text nothing above claimed |
+
+The profile collectors must stay above the KYC collector: the KYC collector
+matches every private message and only then checks the member's status.
+
 ## The member lifecycle
 
-Every member has exactly one `status` column in the `members` table
-(`src/db.py`), and that single value drives every decision the bot makes
-about what to say to them and what buttons to show. The statuses are:
+Every member has exactly one `status` in the `members` table, and that value
+drives what the bot says to them and which buttons it shows:
 
 ```
 pending_summary  →  pending_review  →  awaiting_dm  →  kyc_in_progress
@@ -49,260 +104,257 @@ pending_summary  →  pending_review  →  awaiting_dm  →  kyc_in_progress
                                                        pending_access
                                                         ╱          ╲
                                                    active          declined
-                                                                   (loops back
-                                                                to kyc_in_progress,
-                                                              up to MAX_DECLINES=3
-                                                            attempts, 6h cooldown
-                                                               once capped)
+                                                     │          (back to kyc_in_progress)
+                                                     ▼
+                                                  removed
 ```
 
-- **`pending_summary`** — default status for every new row. The member is
-  either still in the induction group reading, or was sent back here by an
-  admin who said "not yet."
-- **`pending_review`** — the member tagged the bot (and the required admin
-  handles) with what the bot classified as an onboarding-readiness post; an
-  admin review card is waiting in the onboarding group.
-- **`awaiting_dm`** — an admin approved the induction post. The member has
-  been told to DM the bot to begin registration, but hasn't started KYC yet.
-- **`kyc_in_progress`** — the member is mid-way through the KYC field list
-  (`src/kyc_fields.py`); `kyc_field_index` tracks exactly which question
-  they're on.
-- **`pending_access`** — every active KYC field has been answered. A review
-  card with all their answers is waiting in the onboarding group.
-- **`active`** — an admin approved final access. The member has received a
-  single-use personal invite link to the main ATL group (or a note that an
-  admin will follow up if link creation failed).
-- **`declined`** — an admin declined the KYC review, with a reason. The
-  member can restart immediately unless they've hit `MAX_DECLINES` (3),
-  in which case there's a `COOLDOWN_SECONDS` (6 hour) wait before they can
-  try again.
-- **`removed`** — defined in the schema's `CHECK` constraint and in
-  `ALL_STATUSES`, reserved for an admin manually removing a member for
-  misconduct. **No code path currently sets this status** — there is no
-  "remove member" command or handler yet.
+- **`pending_summary`**: the default for every new row. The member is still
+  reading in the induction group, or an admin said "not yet".
+- **`pending_review`**: the member posted their "I'm ready" message, tagging
+  the bot and the required admins; a review card is waiting in the
+  onboarding group.
+- **`awaiting_dm`**: an admin approved the induction post. The member has
+  been told to DM the bot to begin registration.
+- **`kyc_in_progress`**: the member is part-way through the KYC questions;
+  `kyc_field_index` tracks which one.
+- **`pending_access`**: every active KYC question is answered; a review
+  card with all the answers is waiting in the onboarding group.
+- **`active`**: a full member. Reached by admin approval, by linking an
+  old-website record, by being verified in the main group, or by the owner
+  adding them to the main group directly.
+- **`declined`**: an admin declined the registration, with a reason. Below
+  `MAX_DECLINES` (3) the member can register again straight away; from then
+  on there is a `COOLDOWN_SECONDS` (6 hour) wait after each decline.
+- **`removed`**: the member was banned from the main group. Alpha tells
+  them their membership has been removed and to contact an admin, in DMs,
+  in the induction group and on `/kyc`.
 
 ## How it works
 
-### 1. Induction (`src/modules/induction.py`)
+### Onboarding (`src/onboarding/`)
 
-This module owns everything that happens in the **induction group**
-(`INDUCTION_GROUP_ID`) before a member is handed off to KYC.
+#### 1. Induction (`induction.py`)
 
-**On join** (`handle_new_member`, triggered by a `NEW_CHAT_MEMBERS` status
-update): the bot upserts the member row, logs a `joined_induction` event
-(used later to measure how long they've been in the group), sends the
-`WELCOME_INDUCTION` message (pointing them at `INDUCTION_PINNED_URL`), and
-schedules that welcome message for deletion after `WELCOME_DELETE_SECONDS`
-(24h) so old join spam doesn't pile up in the group.
+Everything that happens in the **induction group** (`INDUCTION_GROUP_ID`)
+before a member is handed to registration.
 
-**Catching the tag** (`handle_induction_post`, on any text message in the
-group): the bot only reacts if `_bot_was_tagged` returns true — either the
-message `@`-mentions the bot's own username, or it's a reply to a message
-this specific bot sent. Everything else is ignored. Once tagged:
+**On join** (`handle_new_member`): the bot creates the member row, logs a
+`joined_induction` event (used later to measure time in the group), and posts
+`WELCOME_INDUCTION`, deleted after `WELCOME_DELETE_SECONDS` (24h).
 
-1. **Status short-circuits.** If the member is already `pending_review`,
-   `awaiting_dm`, or further along (`kyc_in_progress`, `pending_access`,
-   `active`, `declined`), the bot replies with a status-appropriate message
-   instead of re-processing the post, and schedules that reply (paired with
-   the member's own message) for deletion after `REMINDER_DELETE_SECONDS`
-   (3h) via `_schedule_pair`.
-2. **Tag completeness check** (`_missing_tags`). The post must mention every
-   handle in `REQUIRED_TAGS` (the onboarding admins) as well as the bot
-   itself. `_missing_tags` does a regex word-boundary search per tag so
-   `@Dr_evidence` doesn't false-positive against `@Dr_evidence2`.
-3. **Intent classification.** If (and only if) required tags are missing,
-   the bot asks Gemini (`classify_induction_intent`, `src/llm.py`) whether
-   the post is a genuine **question** or a signal that the member believes
-   they're ready to move on (**onboarding**). This call is skipped — and
-   `onboarding` is assumed — whenever all required tags are already present,
-   since tagging every admin correctly is treated as a strong enough signal
-   of submission intent on its own. See
-   [Known limitations](#known-limitations) for the edge case this creates.
-4. **Question path.** A classified question is answered publicly by
-   `ask_alpha` (`src/llm.py`) with `GROUP_REPLY_CONTEXT` appended to the
-   system context — this instructs Alpha to keep group replies short (≤3
-   sentences) and to never post a group invite link publicly. Both the
-   member's question and Alpha's answer are scheduled for deletion together
-   after `REMINDER_DELETE_SECONDS`.
-5. **Onboarding path — minimum time gate.** `db.seconds_since_last_event`
-   checks how long it's been since `joined_induction`. If that's under
-   `MIN_INDUCTION_SECONDS` (10 days by default, or overridden directly via
-   the `MIN_INDUCTION_SECONDS` env var), the bot replies with a
-   human-readable "come back in about N days/hours/minutes" message
-   (`_humanise`) and schedules the pair for deletion. Members who joined
-   before the bot was running (no `joined_induction` event on record) skip
-   this gate entirely — there's no way to know when they actually joined.
-6. **Onboarding path — incomplete tags.** If required tags are still
-   missing at this point (classified `onboarding` despite missing tags), the
-   bot replies with `INDUCTION_POST_INCOMPLETE`, logs an
-   `induction_post_incomplete` event, and schedules the pair for deletion.
-7. **Valid submission.** `db.create_application` records the post
-   (including the exact source chat/message id, so admins can jump straight
-   to it), status moves to `pending_review`, the bot acknowledges the member
-   (deleted after `WELCOME_DELETE_SECONDS` — the member's own post is left
-   alone, since it's needed for admin review), and `send_summary_card`
-   posts a review card to the onboarding group with the member's Telegram
-   handle, bot-observed time in the group, and a direct link to their post.
+**Catching the tag** (`handle_induction_post`): the bot only reacts when it
+is @-mentioned or replied to. Then:
 
-**The decision** (`handle_induction_decision`, callback pattern `ind:`): an
-admin taps **✅ Approve** or **❌ Not yet** on the review card.
-`db.decide_application` is the single source of truth for "has this already
-been decided" (its `UPDATE ... WHERE decision IS NULL` is atomic, so two
-admins tapping at once can't double-process one application). Either way,
-the original induction post is deleted from the group (so a stale,
-correctly-tagged post doesn't stay visible as a template for others to
-copy). On approve, status becomes `awaiting_dm` and the member gets a
-public mention with a "Start registration" deep link
-(`?start=kyc`). On decline, status returns to `pending_summary` and the
-member is told, publicly, to spend more time with the material.
+1. **Status short-circuits.** A member already under review, approved,
+   further along, or removed gets a short status reply instead. The reply and
+   their post are deleted together after `REMINDER_DELETE_SECONDS` (3h).
+2. **Tag check** (`_missing_tags`). The post must mention every handle in
+   `REQUIRED_TAGS`, matched on word boundaries so `@Dr_evidence` doesn't
+   match `@Dr_evidence2`.
+3. **Intent classification.** Only if tags are missing, Gemini
+   (`classify_induction_intent`) decides whether the post is a **question**
+   or an **onboarding** signal.
+4. **Question path.** Answered publicly by `ask_alpha`, told to keep it to
+   three sentences and never post an invite link.
+5. **Minimum time.** If the member joined less than `MIN_INDUCTION_SECONDS`
+   ago (10 days by default), they're told roughly how long is left. Members
+   who joined before the bot was running have no `joined_induction` event
+   and skip this gate.
+6. **Incomplete tags.** An onboarding post with tags missing gets
+   `INDUCTION_POST_INCOMPLETE`.
+7. **Valid submission.** An application is recorded, status moves to
+   `pending_review`, and `send_summary_card` posts a review card to the
+   onboarding group with a link to the post.
 
-**Join requests** (`handle_join_request`): approves or declines a Telegram
-join request based on whether the member's status is `active`. **This
-handler is currently dormant** — see
-[Known limitations](#known-limitations).
+**The decision** (`handle_induction_decision`, buttons `ind:`): ✅ Approve or
+❌ Not yet. `db.decide_application` is atomic, so two admins tapping at once
+can't double-process one application. The member's post is deleted either
+way. On approve, status becomes `awaiting_dm` and the member gets a public
+"Start registration" button (`?start=kyc`); that post is deleted as soon as
+they start registering, or after 24h. On "not yet", status returns to
+`pending_summary` and the member is pointed back to the material.
 
-### 2. Registration (KYC) (`src/modules/kyc.py`)
+#### 2. Registration, KYC (`kyc.py`)
 
-Once a member DMs the bot (via the `?start=kyc` deep link or `/kyc`),
-`handle_kyc_entry` branches on their current status:
+Entered through the `?start=kyc` deep link (or `/kyc`).
+`handle_kyc_entry` branches on status: start fresh, resume, restart after a
+decline (subject to the retry rule in `seconds_until_retry`), or explain
+why there's nothing to do.
 
-- `awaiting_dm` → starts KYC fresh (`start_kyc`): sets `kyc_in_progress`,
-  resets `kyc_field_index` to 0, and sends the first field.
-- `kyc_in_progress` → resumes exactly where they left off.
-- `declined` → checks the decline cap/cooldown (see below), then restarts.
-- `pending_access` / `active` → tells them there's nothing more to do.
-- anything else (still in induction) → tells them to finish induction
-  first.
+Questions come one at a time from `active_fields()` in
+`src/kyc_form/fields.py`. Each answer is checked by
+`src/kyc_form/validators.py` before it's saved. Choice questions use buttons
+(`kyc:`); document questions need a photo or file. After three bad attempts
+on one question the answer is saved with `needs_review=1` and the flow moves
+on, so nobody gets stuck. When every question is answered, `finish_kyc` sets
+`pending_access` and hands over to `access_review.py`.
 
-Fields are asked one at a time from `active_fields()`
-(`src/kyc_fields.py`), which sorts the active subset by an `order` integer.
-Each answer is validated by `src/validators.py` before being saved
-(`_save_and_advance`) and the index bumped. Choice-type fields use inline
-keyboard buttons (`kyc:{field_index}:{option_index}` callback data);
-document-type fields require a photo or file upload. A per-field
-`kyc_attempts` counter (reset on every successful advance) caps retries at
-`MAX_ATTEMPTS = 3`; on the third bad attempt the answer is saved anyway with
-`needs_review=1` so an admin can follow up, and the flow moves on rather
-than getting the member stuck.
+#### 3. Admin access review (`access_review.py`)
 
-Once every active field has an answer, `finish_kyc` sets `pending_access`
-and calls `admin.send_access_request` to post the review card. A
-`declined` member gets three total attempts (`MAX_DECLINES`) before a
-`COOLDOWN_SECONDS` (6h) wait is enforced between further tries.
+`build_kyc_card` posts every answer to the onboarding group (birthdays
+spelled out, e.g. "5 July", so `07-05` can't be misread as 7 May), with the
+member's ID photos posted as replies under the card, and **Approve /
+Decline** buttons (`acc:`).
 
-### 3. Admin access review (`src/modules/admin.py`)
+- **Approve** sets `active` and DMs the member `welcome_approved()` with a
+  single-use invite link from `members/main_group.invite_for`. The link is
+  stored, so the member never ends up with two different ones. If the invite
+  can't be created, the member is told an admin will follow up instead.
+- **Decline** opens a tick-box reason picker (`DECLINE_REASONS`) with an
+  "Other" option, which asks the admin to reply with a typed reason.
+  `_finalise_decline` sets `declined`, tells the member (with a "Start
+  registration again" button) and marks the card.
+- If the member can't be messaged (for example, they blocked the bot), a
+  notice is posted under the card so an admin can reach them another way.
 
-`build_kyc_card` renders every active field's answer (or a "needs review"
-flag) plus the member's decline history, and posts it to
-`ONBOARDING_GROUP_ID` with **View documents / Approve / Decline** buttons
-(`handle_access_decision`, callback pattern `acc:`).
+### Existing members (`src/members/`)
 
-- **View documents** DMs the reviewing admin every uploaded photo/file, one
-  message per document, without changing any state.
-- **Approve** sets `active`, edits the card to show who approved it, then
-  calls `_personal_invite` to create a **single-use** Telegram invite link
-  into `MAIN_GROUP_ID` (`member_limit=1`, expiring after
-  `INVITE_TTL_SECONDS` — 48h) and DMs it to the member via
-  `welcome_approved()`. If invite creation fails for any reason (the bot
-  isn't an admin in the main group, a bad `MAIN_GROUP_ID`, a Telegram API
-  error), the exception is caught and logged, and the member instead gets a
-  message saying an admin will follow up — approval never fails just
-  because the invite link couldn't be created.
-- **Decline** opens a checkbox-style reason picker (`_reason_keyboard`,
-  toggled via `acc:tog:`) built from `DECLINE_REASONS`, with an "Other" flow
-  that posts a `ForceReply` prompt in the onboarding group so an
-  admin can type a custom reason (caught by `handle_decline_reason`).
-  Confirming (`acc:cfm:`) calls `_finalise_decline`, which sets `declined`,
-  tells the member (with a "start again" button unless they've hit
-  `MAX_DECLINES`), and updates the card.
+#### 4. Keeping the main group in step (`main_group.py`)
 
-### 4. Alpha, the assistant (`src/modules/alpha.py`, `src/llm.py`)
+The rule: everyone in the main group is on record, and every approved member
+is in the main group. The Bot API can't list a group's members, so this is
+enforced whenever Alpha sees someone.
 
-Any private DM that isn't mid-KYC and isn't a command falls through to
-`handle_alpha_message` (registered in a *lower-priority handler group* than
-everything else in `main.py`, so it only ever sees messages nothing else
-claimed). It sends a "typing…" action, looks up the member's status,
-maps that status to a human-readable context string via `STATUS_CONTEXT`
-(or `NO_RECORD` if the person has no row at all), and passes the member's
-message plus that context to `ask_alpha`.
+- **Joins** (`handle_main_group_member_update`, needs Alpha to be an admin in
+  the main group). Someone joining without an `active` record is removed
+  (ban, then unban, so they can come back properly). If Alpha can, it tells
+  them where to start (`ONBOARDING_ENTRY_URL`), and it alerts the owner with
+  how they got in. People the owner adds, or who join through the owner's
+  links, are recorded as `active` with an empty profile. **With
+  `OWNER_USER_ID` unset, nobody is removed.**
+- **Leaves.** A member banned from the group becomes `removed`. A member who
+  left on their own stays `active`, and Alpha offers a fresh one-time invite
+  the next time they message.
+- `main_group_state` asks Telegram whether someone is in the group, cached
+  for 10 minutes; `in_main_group` always asks fresh, for decisions like
+  recognising a member.
 
-`ask_alpha` (`src/llm.py`) calls the Gemini API (`google-genai`, model
-`gemini-3.5-flash`) with a `SYSTEM_INSTRUCTION` built once at import time
-from `resources/prompts/alpha_persona.md` (Alpha's persona and rules,
-including "never post a group invite link" and "never notify/escalate to
-admins yourself") plus `resources/knowledge/atl_core.md` (ATL's actual
-policies, membership rules, and FAQ-style knowledge). Any per-message
-`context_note` (member status, or `GROUP_REPLY_CONTEXT` for induction-group
-replies) is appended on top. API errors and unexpected exceptions are both
-caught and answered with a generic `FALLBACK` message rather than crashing
-the handler or leaking a stack trace to the member.
+#### 5. Members from the old website (`legacy.py`)
 
-The same module exposes `classify_induction_intent`, used only by
-`induction.py` (see above) — a separate, much cheaper Gemini call
-(`max_output_tokens=20`) constrained to reply with exactly one word,
-defaulting to `"onboarding"` on any error or ambiguous response.
+Members imported from the old website's spreadsheet (`scripts/import_legacy.py`)
+are recognised instead of being sent through induction:
 
-### 5. Scheduled message cleanup
+- **Passively.** The first post Alpha sees from someone in the main group
+  (or a DM) is matched against the spreadsheet's Telegram usernames.
+  Main-group posters still not on record get a short in-group nudge, at most
+  weekly, deleted after 15 minutes.
+- **One tap.** `?start=link` (the "I'm already an ATL member" button) checks
+  they're in the main group, then offers **Share my number** or **Skip**. A
+  matching phone links their old record and copies its answers into their
+  profile. No match, or Skip, still makes a verified main-group member
+  `active`, with an empty profile. The number is used once for matching and
+  is never stored, logged, or passed to KYC or the LLM.
 
-Several flows above call `db.schedule_deletion(chat_id, message_id,
-seconds)` instead of deleting a message immediately, so groups stay
-readable without messages vanishing mid-conversation. Rows live in the
-`scheduled_deletions` table. A periodic job (`induction.sweep_deletions`,
-registered on `app.job_queue` in `main.py` with `interval=300` seconds and
-`first=10`) polls `db.due_deletions()` every 5 minutes, deletes each
-message (a failure — already deleted, bot lacks permission, etc. — is
-logged and the row is cleared anyway so it's never retried forever), and
-clears the row via `db.clear_deletion`. This requires the
-`python-telegram-bot[job-queue]` extra (APScheduler) to be installed — see
-[Environment variables](#environment-variables) / `requirements.txt`; if
-it's missing, `main.py` logs an error and simply skips registering the job
-rather than crashing.
+#### 6. Profile (`profile.py`)
 
-### 6. Leadership reminders (not currently wired up)
+`/profile`, the **My profile** button under Alpha's replies, or a plain
+`/start` shows an active member each detail as done ✅, waiting for approval
+⏳, needing an update ⚠️ or missing ❌. The message deletes itself after 10
+minutes.
 
-`src/modules/leadership.py` exists (membership check against
-`LEADERSHIP_GROUP_ID`, a `handle_registration` handler meant to be reached
-via a `/start leadership` deep link) but **is not connected to anything** —
-`main.py` imports the module but never registers a handler for it, and the
-`/start` command only recognizes the `kyc` payload. See
-[Known limitations](#known-limitations).
+**Fill in missing details** asks the gaps one at a time. Fields marked
+`"edit": "self"` in `src/kyc_form/fields.py` save straight away. Identity and
+vouch details go to a card in the onboarding group, where admins approve or
+reject each one before it's saved. The member is told the outcome once
+everything on the card is decided.
+
+#### 7. Editing details on file (`profile_edit.py`)
+
+**Edit my details** opens a menu. Vouch name and username, and ID type plus
+both ID photos, are edited together, so an ID record is never half-changed.
+Every edit shows current → new and waits for the member to confirm.
+Self-edit fields save on confirm. Approval fields go to the onboarding group
+as one card, approved or rejected as a whole (a rejection carries a preset
+reason the member sees). Name and birthday changes post the member's current
+ID under the card to compare against.
+
+### Alpha, the assistant (`src/assistant/`)
+
+`chat.py` handles any private text nothing else claimed. Before involving the
+LLM it keeps the main group in step: removed members are told so, main-group
+members with no record are offered the link flow, and active members who've
+left get a fresh invite. Then it sends the message to `ask_alpha` with a note
+about where the member stands (`context.py`).
+
+`llm.py` calls Gemini (`google-genai`, model `gemini-3.5-flash`) with a system
+prompt built once at startup from `resources/prompts/alpha_persona.md`
+(persona and rules) and `resources/knowledge/atl_core.md` (ATL's policies and
+FAQ). Errors are answered with a polite fallback, never a stack trace.
+`classify_induction_intent` is a separate, much cheaper call that returns one
+word, defaulting to "onboarding" on any error.
+
+### Scheduled message cleanup (`src/common/cleanup.py`)
+
+Features call `db.schedule_deletion(chat_id, message_id, seconds)` rather
+than deleting straight away, so groups stay tidy without messages vanishing
+mid-conversation. `sweep_deletions` runs every 5 minutes (first run 10s after
+startup) and deletes whatever is due. A failure is logged and the row cleared
+anyway, so nothing is retried forever. This needs the
+`python-telegram-bot[job-queue]` extra; without it, `main.py` logs an error
+and runs without the job.
 
 ## Project structure
 
 ```
 atlbot/
-├── main.py                    # Entry point — builds the bot, registers handlers, runs the job queue
-├── config.py                  # Loads and validates environment variables
+├── main.py                     # Entry point: registers every handler in priority order, runs the bot
 ├── requirements.txt
+├── .env.example                # Every setting, with placeholders
 │
 ├── src/
-│   ├── db.py                  # SQLite access layer (schema, queries, transactions)
-│   ├── llm.py                 # Gemini client wrapper: ask_alpha + classify_induction_intent
-│   ├── validators.py          # KYC answer validation/normalisation
-│   ├── kyc_fields.py          # Single source of truth for the KYC question list
-│   ├── messages.py            # Shared message templates (welcome, induction, incomplete-post)
-│   └── modules/                # One file per conversational flow / handler group
-│       ├── induction.py       # Induction-group welcome, tag-gate, admin review, cleanup sweep
-│       ├── kyc.py             # Walks a member through registration
-│       ├── admin.py           # KYC review card + approve/decline + personal invite links
-│       ├── alpha.py           # LLM-backed catch-all assistant
-│       └── leadership.py      # Leadership reminder opt-in — NOT currently wired into main.py
+│   ├── config.py               # Settings from .env
+│   ├── commands.py             # /start deep-link router, /chatid, /kyc
+│   │
+│   ├── onboarding/             # New members, from the induction group to the main group
+│   │   ├── induction.py        # Welcome, "I'm ready" post, admin review of the post
+│   │   ├── kyc.py              # Registration questions in DM; retry rules after a decline
+│   │   ├── access_review.py    # Admin approve/decline of a finished registration
+│   │   └── messages.py         # Longer member-facing texts
+│   │
+│   ├── members/                # Existing members
+│   │   ├── main_group.py       # Joins, leaves, removals, invite links, "removed" text
+│   │   ├── legacy.py           # Recognising members from the old website
+│   │   ├── profile.py          # View details, fill in what's missing, per-field approval card
+│   │   └── profile_edit.py     # Change details on file, grouped approval card
+│   │
+│   ├── assistant/              # Alpha, the LLM
+│   │   ├── chat.py             # DM catch-all
+│   │   ├── context.py          # What Alpha is told about the member's status
+│   │   └── llm.py              # Gemini client
+│   │
+│   ├── kyc_form/               # The KYC questions, shared by onboarding, members and the import
+│   │   ├── fields.py           # The question list, labels, display formatting
+│   │   └── validators.py       # Checking and cleaning answers
+│   │
+│   ├── common/                 # Used by every feature
+│   │   ├── telegram_helpers.py # send_file, deep links, mentions, admin-card names
+│   │   └── cleanup.py          # The scheduled-deletion job
+│   │
+│   └── db/                     # SQLite data layer; `from src import db` gives all of it
+│       ├── __init__.py         # Index of every db function, by module
+│       ├── schema.py           # Every table, and the member statuses
+│       ├── connection.py       # get_conn(), init_db()
+│       ├── members.py          # Members, status changes, audit events
+│       ├── onboarding.py       # Applications, KYC answers, registration prompts
+│       ├── deletions.py        # Scheduled deletions
+│       ├── legacy.py           # Old-website records, matching keys, linking
+│       ├── profile.py          # Profile sessions, edit sessions, approvals
+│       └── main_group.py       # Owner-added members, invites, in-group nudges
 │
-├── resources/                  # Content read by src/llm.py at import time
-│   ├── prompts/alpha_persona.md   # Alpha's system prompt / persona
-│   └── knowledge/atl_core.md      # ATL knowledge base given to the LLM
+├── resources/                  # Read by src/assistant/llm.py at startup
+│   ├── prompts/alpha_persona.md
+│   └── knowledge/atl_core.md
 │
-├── scripts/                    # Standalone dev/maintenance utilities (not imported by the app)
-│   ├── inspect_db.py          # Dump schema + row counts for the local DB
-│   ├── inspect_data.py        # Print stored member/event rows (contains PII — local use only)
-│   ├── wipe_test_data.py      # Delete all member data (local testing only)
-│   ├── list_model.py          # List available Gemini models for the configured API key
-│   └── test_gemini.py         # Manual smoke test against the Gemini API
+├── scripts/                    # Standalone tools, run by hand or on a schedule
+│   ├── import_legacy.py        # One-time import of the old website's spreadsheet
+│   ├── backup_db.py            # Nightly backup to S3
+│   └── list_model.py           # List Gemini models for the API key
 │
-├── data/                        # gitignored — local exports (e.g. member CSV dumps)
-├── secrets/                     # gitignored — local credential files (e.g. atlbot.pem)
-├── atl_bot.db                   # gitignored — local SQLite database file
-└── .env                         # gitignored — local environment variables
+├── data/                       # gitignored: local exports and backups
+├── secrets/                    # gitignored: local credential files
+├── atl_bot.db                  # gitignored: the SQLite database
+└── .env                        # gitignored: settings
 ```
 
 ## Getting started
@@ -321,193 +373,133 @@ pip install -r requirements.txt
 cp .env.example .env           # then fill in real values — see below
 ```
 
-> There's no `.env.example` in the repo yet — see [Environment variables](#environment-variables)
-> for the full list of keys to put in your own `.env` file.
+Alpha needs admin rights in three groups:
 
-For the bot to actually approve members into the main group, it must be an
-**admin** in `MAIN_GROUP_ID` with permission to invite users (so it can
-call `create_chat_invite_link`), and an admin in `ONBOARDING_GROUP_ID` and
-`INDUCTION_GROUP_ID` (so it can post/delete messages and read all updates
-there).
+- **Main group** (`MAIN_GROUP_ID`): *Invite users via link* to create invite
+  links, and *Ban users* to remove people who skipped onboarding. Being an
+  admin is also what lets Alpha see joins and leaves.
+- **Onboarding group** (`ONBOARDING_GROUP_ID`): post review cards and read
+  admins' replies.
+- **Induction group** (`INDUCTION_GROUP_ID`): read every message and delete
+  messages.
 
 ## Environment variables
 
-Set these in a `.env` file at the project root (loaded automatically via
-`python-dotenv`). To find a chat ID, temporarily run the bot and use the
-built-in `/chatid` command inside the target group.
+Set these in `.env` at the project root (loaded by `src/config.py`). To find a
+chat ID, add the bot to the group and send `/chatid` there.
 
-| Variable                        | Required | Default                     | Description |
-|----------------------------------|:--------:|------------------------------|--------------|
-| `BOT_TOKEN`                      | ✅       | —                             | Telegram bot token from [@BotFather](https://t.me/BotFather). |
-| `GEMINI_API_KEY`                 | ✅       | —                             | API key for the Gemini model that powers Alpha's replies and intent classification. |
-| `ONBOARDING_GROUP_ID`            | ✅       | —                             | Chat ID of the group where KYC/induction review cards are posted and decided. |
-| `MAIN_GROUP_ID`                  | Effectively required | `0`             | Chat ID of the main ATL group. Used to generate each approved member's single-use invite link — without it, `create_chat_invite_link` will fail (caught; the member is told an admin will follow up instead). |
-| `INDUCTION_GROUP_ID`             | Effectively required | `0`             | Chat ID of the induction group — welcome messages, tag-gating, and the minimum-time check all key off this. |
-| `INDUCTION_GROUP_PINNED_MESSAGE` | Optional | `None`                        | URL pointed to as "the induction material" in welcome/reminder messages (read as `INDUCTION_PINNED_URL`). |
-| `LEADERSHIP_GROUP_ID`            | Optional | `0`                           | Chat ID of the leadership group. Currently unused in practice — see [Known limitations](#known-limitations). |
-| `ATL_DB_PATH`                    | Optional | `<project root>/atl_bot.db`   | Override for the SQLite file path. Accepts a relative or absolute path; `~` is expanded. |
-| `MIN_INDUCTION_SECONDS`          | Optional | `MIN_INDUCTION_DAYS * 86400`  | Minimum time (in **seconds**) a member must be in the induction group before their post is accepted. Overrides `MIN_INDUCTION_DAYS` (hardcoded to `10`) if set. |
-| `REQUIRED_TAGS`                  | Optional | `@ShemmyCypher,@Dr_evidence,@Epitome61` | Comma-separated list of handles a member's induction post must tag before it's forwarded for review. |
+| Variable | Required | Default | Description |
+|----------|:--------:|---------|-------------|
+| `BOT_TOKEN` | ✅ | — | Telegram bot token from [@BotFather](https://t.me/BotFather). |
+| `GEMINI_API_KEY` | ✅ | — | API key for the Gemini model behind Alpha's replies and intent classification. |
+| `ONBOARDING_GROUP_ID` | ✅ | — | Group where admins review applications, registrations and profile changes. |
+| `MAIN_GROUP_ID` | Effectively required | `0` | The main ATL group. Needed for invite links, legacy linking and all main-group checks. |
+| `INDUCTION_GROUP_ID` | Effectively required | `0` | The induction group: welcomes, the "I'm ready" post and the minimum-time check. |
+| `OWNER_USER_ID` | Recommended | `0` | The one person who may add members to the main group directly; alerted when anyone else's join is reversed. **Unset = nobody is removed.** |
+| `ONBOARDING_ENTRY_URL` | Optional | — | Where removed joiners are sent to start onboarding (e.g. the induction group link). Unset = "contact an ATL admin". |
+| `INDUCTION_GROUP_PINNED_MESSAGE` | Optional | — | URL of the induction material, used in welcome and reminder messages. |
+| `REQUIRED_TAGS` | Optional | `@ShemmyCypher,@Dr_evidence,@Epitome61` | Comma-separated handles an induction post must tag. |
+| `MIN_INDUCTION_SECONDS` | Optional | 10 days | Minimum time in the induction group before a post is accepted. |
+| `ATL_DB_PATH` | Optional | `<project root>/atl_bot.db` | Where the SQLite file lives; `~` is expanded. |
+| `ATL_BACKUP_BUCKET` | For backups | — | S3 bucket used by `scripts/backup_db.py`. |
 
-**Not currently read by the code, but present in a typical `.env` for this
-project:** a long list of ATL group/class link variables (e.g.
-`ATL_MARKET_PLACE`, `ATL_FUN_GROUP`, `INTRODUCTORY_CLASSES_*`,
-`MICROSOFT_EXCEL_FEB2022`, etc.). These aren't referenced anywhere in
-`config.py` or elsewhere in the codebase today — they appear to be reserved
-for features not yet built. Don't rely on them being wired up.
-
-**Removed:** earlier versions of this bot read a static `MAIN_GROUP` invite
-link and sent it to every approved member. That has been replaced entirely
-by the per-member, single-use invite links described above — `config.py` no
-longer reads `MAIN_GROUP` at all, and `src/messages.py` no longer contains
-a message that embeds a static group link, by design (the static link
-should never be posted or embedded anywhere the bot can leak it).
-
-The following are hardcoded in `config.py` rather than read from the
-environment: `MAX_DECLINES` (3), `COOLDOWN_SECONDS` (6h), `INVITE_TTL_SECONDS`
-(48h), `WELCOME_DELETE_SECONDS` (24h), `REMINDER_DELETE_SECONDS` (3h).
-Change them directly in `config.py` if you need different values.
+Blank values are treated as unset. These are fixed in `src/config.py` rather
+than read from the environment: `MAX_DECLINES` (3), `COOLDOWN_SECONDS` (6h),
+`INVITE_TTL_SECONDS` (48h), `WELCOME_DELETE_SECONDS` (24h),
+`REMINDER_DELETE_SECONDS` (3h), `REGISTRATION_PROMPT_DELETE_SECONDS` (24h).
 
 ## Running the bot
 
 ```bash
 python main.py
-# or: python -m main
 ```
 
-This initializes the SQLite schema if it doesn't exist yet (`db.init_db()`),
-registers the `sweep_deletions` job on the job queue (if the `job-queue`
-extra is installed), registers every handler described above, and starts
-long-polling for updates (`allowed_updates=Update.ALL_TYPES`, so chat-join
-requests and other non-message updates are delivered too).
+This creates any missing tables (`db.init_db()`), registers the cleanup job
+and every handler, and starts long-polling with
+`allowed_updates=Update.ALL_TYPES`, so joins, leaves and join requests are
+delivered too. On the server it runs as the `atlbot` systemd service.
 
-Only run **one** instance of the bot against a given `BOT_TOKEN` at a time —
-Telegram's long-polling API rejects a second concurrent `getUpdates` call
-with a `Conflict` error.
+Only run **one** instance per `BOT_TOKEN`: Telegram rejects a second
+`getUpdates` with a `Conflict` error. Don't start the bot locally with the
+production token while the server is running.
 
 ## Database
 
-SQLite is the single source of truth (`src/db.py`), with five tables. Every
-write goes through `get_conn()`, a context manager that commits on success,
-rolls back and re-raises on any exception, and always closes the
-connection — so a partial failure inside a multi-statement function (like
-`set_status`, which updates `members` and inserts into `member_events` in
-one call) never leaves the database half-updated.
+SQLite is the single source of truth. All tables are defined in
+`src/db/schema.py` and created at startup; every query goes through
+`get_conn()`, which commits on success, rolls back on any error and always
+closes, so a multi-step change (like a status change plus its audit event)
+never half-applies.
 
-- **`members`** — one row per Telegram user: profile fields (`username`,
-  `first_name`, `last_name`), onboarding `status` (see
-  [The member lifecycle](#the-member-lifecycle)), and KYC progress
-  (`kyc_field_index`, `kyc_attempts`). `upsert_member` creates the row on
-  first contact and refreshes profile fields on every subsequent contact
-  (via `COALESCE`, so a `None` argument never overwrites a known value) —
-  it never touches `status`.
-- **`applications`** — one row per KYC submission, recording the admin's
-  `decision` (`approved`/`declined`, `NULL` while pending), who decided it,
-  and when.
-- **`member_events`** — an append-only audit log: every status change (as
-  `status:<name>`), plus one-off events like `joined_induction`,
-  `documents_viewed`, `induction_post_incomplete`, `kyc_restarted`,
-  `joined_main_group`, and `join_request_declined`. `seconds_since_last_event`
-  and `count_events` both query this table directly in SQL rather than
-  loading rows into Python, so time-based gates (like the induction minimum
-  wait) can't drift due to clock differences between the bot process and
-  the database.
-- **`kyc_responses`** — one row per `(member, field)` answer, either as
-  text or an uploaded file reference (`file_ref`), with a `needs_review`
-  flag for anything that hit the max retry count without validating.
-- **`scheduled_deletions`** — one row per message queued for deletion by
-  `db.schedule_deletion`, cleared by the periodic `sweep_deletions` job (see
-  [Scheduled jobs](#scheduled-jobs)).
+| Table | Holds |
+|-------|-------|
+| `members` | One row per Telegram user: name fields, `status`, KYC progress. |
+| `member_events` | Append-only audit log: every status change (`status:<name>`) and events like `joined_induction`, `legacy_linked`, `profile_change_approved`. |
+| `applications` | Induction "I'm ready" posts and the admin's decision. |
+| `kyc_responses` | One answer per member per question: text or a file reference, with `needs_review`. |
+| `registration_prompts` | The induction-group "tap to register" post, so it can be deleted once used. |
+| `scheduled_deletions` | Messages waiting for the cleanup job. |
+| `legacy_members`, `legacy_responses` | The old website's spreadsheet, and which Telegram user claimed each row. |
+| `profile_sessions` | Members part-way through filling in missing details. |
+| `edit_sessions` | Members part-way through an edit; the draft stays here until they confirm. |
+| `pending_changes` | Profile details waiting for admin approval, and the decision. |
+| `main_group_invites` | Each member's current one-time invite link, so it's re-sent rather than re-made. |
+| `group_prompts` | When someone was last nudged in the main group to update their details. |
 
-The database file is created at the location described in
-[Environment variables](#environment-variables) the first time the bot
-runs, and is gitignored — it holds real member PII (names, phone numbers,
-addresses, ID photos-by-reference) and must never be committed.
+The database holds real member PII (names, phone numbers, addresses, ID
+photos by reference) and is gitignored. It must never be committed.
 
 ## Bot commands
 
-| Command   | Description                                                        |
-|-----------|---------------------------------------------------------------------|
-| `/start`  | Entry point. Recognizes the `?start=kyc` deep link used throughout the induction/approval flow; anything else gets a generic pointer back to the group that invited them. |
-| `/kyc`    | Manually (re)enter the registration flow — marked `TEMPORARY` in `main.py`, intended as a debug/testing convenience rather than the primary entry point (which is the `?start=kyc` deep-link button). |
-| `/chatid` | Replies with the current chat's ID — useful for filling in the group-ID variables in `.env`. |
+| Command | Description |
+|---------|-------------|
+| `/start` | Deep-link entry point: `?start=kyc` begins or resumes registration, `?start=link` is the "I'm already an ATL member" flow. With no payload, an active member sees their profile. |
+| `/profile` | Show your profile, with buttons to fill in or edit details. |
+| `/kyc` | Enter registration without the deep link. Marked TEMPORARY. |
+| `/chatid` | Replies with the current chat's ID, for filling in `.env`. |
 
-## Scheduled jobs
+## Scripts
 
-| Job                          | Interval | First run | Purpose |
-|-------------------------------|----------|-----------|---------|
-| `induction.sweep_deletions`   | 300s (5 min) | 10s after startup | Deletes every message whose scheduled time has passed and clears its `scheduled_deletions` row. |
+Standalone tools in `scripts/`, run from the project root with the venv:
 
-Registered via `app.job_queue.run_repeating(...)` in `main.py::main()`.
-Requires the `job-queue` extra (see `requirements.txt`); if unavailable,
-`main.py` logs an error and continues without it rather than crashing.
+- `import_legacy.py <csv> [--commit]`: one-time import of the old website's
+  spreadsheet into `legacy_members`. Dry run by default; the report holds
+  counts only, never member data. Uses the same validators and matching keys
+  as the live bot.
+- `backup_db.py`: hot copy of the database, integrity check, upload to S3,
+  keep the newest 14 copies locally.
+- `list_model.py`: list the Gemini models available to the API key.
 
-## Development scripts
-
-Everything in `scripts/` is a standalone utility, not part of the running
-bot — run with `python -m scripts.<name>` (or `python scripts/<name>.py`)
-from the project root, with the venv active:
-
-- `inspect_db.py` — print the schema, row counts, and indexes of the local DB.
-- `inspect_data.py` — print stored member/event rows. **Contains PII —
-  local use only, never commit its output.**
-- `wipe_test_data.py` — interactively delete all member data. **Local
-  testing only.**
-- `list_model.py` — list Gemini models available to your API key (useful
-  for confirming a `MODEL` value in `src/llm.py` is actually available
-  before relying on it).
-- `test_gemini.py` — send one manual test prompt to Gemini.
+`inspect_db.py`, `inspect_data.py`, `wipe_test_data.py` and `test_gemini.py`
+are local-only and gitignored. `inspect_data.py` prints PII; never share its
+output.
 
 ## Editing the KYC form
 
-The questions Alpha asks during registration live in one place:
-`src/kyc_fields.py`. Each entry is a dict with a `type` (`text`, `email`,
-`phone`, `day_month`, or `choice`, or `document`), a `prompt`, an `order`
-(used to sort the active list), and an `active` flag. There are currently
-15 fields defined, covering identity (full name, email, phone, birthday,
-gender, country/state/address), how the member found ATL, their vouch
-(referrer name + Telegram handle), and two document uploads (an ID photo
-and a photo of the member holding that same ID). One field
-(`newsletter_opt_in`) is defined but set `"active": False`.
+The questions live in one place: `src/kyc_form/fields.py`. Each entry has a
+`key`, a `label` (shown on profiles and admin cards), a `prompt`, a `type`
+(`text`, `email`, `phone`, `day_month`, `choice` or `document`), an `order`
+and an `active` flag. `"edit": "self"` lets members change it without
+approval; anything else needs an admin.
 
-- **Add a question:** append a new dict and give it an `order`.
-- **Remove a question:** set `"active": False` — this keeps previously
-  collected answers intact rather than requiring a schema migration.
-- **Add a new answer type:** add a branch to `src/validators.py`'s
-  `_DISPATCH` table, and (if it needs special handling, like the
-  `document` type's file-upload logic) a corresponding branch in
-  `src/modules/kyc.py::handle_kyc_message`.
+- **Add a question:** add a dict with an `order`.
+- **Remove a question:** set `"active": False`. Answers already collected are
+  kept and no migration is needed.
+- **Add an answer type:** add it to `_DISPATCH` in
+  `src/kyc_form/validators.py`, plus any special handling (like the
+  `document` type's uploads) in `onboarding/kyc.py` and the profile flows.
 
 ## Known limitations
 
-- **Leadership reminders are dead code in practice.** `src/modules/leadership.py`
-  is imported by `main.py` but no handler is ever registered for it, and the
-  `/start` command's payload check only recognizes `"kyc"` — the
-  `/start leadership` deep link this module expects does not currently
-  work. Even if that wiring were restored, `handle_registration` itself
-  calls `db.upsert_member(user.id, user.full_name, user.username)` (wrong
-  argument order for the current `upsert_member(user_id, username=None,
-  first_name=None, last_name=None)` signature) and `db.register_module(...)`
-  (no such function exists in `src/db.py` — it was removed in an earlier
-  schema refactor). Restoring this feature needs both the `main.py` wiring
-  and these two calls fixed.
-- **`handle_join_request` is currently dormant.** It's registered in
-  `main.py` via `ChatJoinRequestHandler`, but the only invite links the bot
-  generates (`admin._personal_invite`) use `member_limit=1`, not
-  `creates_join_request=True` — so joining via one of those links never
-  raises a `chat_join_request` update in the first place. The handler is
-  kept in place as a safety net in case the invite strategy changes back to
-  join-request-based links.
-- **Intent classification is skipped when required tags are present.** In
-  `handle_induction_post`, `classify_induction_intent` only runs when
-  `_missing_tags` finds something missing. A post that happens to tag every
-  required admin *and* is actually a genuine question (rather than an
-  onboarding-readiness signal) will not be classified — it's treated as an
-  onboarding submission and forwarded to admin review.
-- **`removed` status is defined but unreachable.** It's a valid value in
-  the `members.status` `CHECK` constraint and in `db.ALL_STATUSES`, but no
-  command or handler currently sets it — there's no "remove this member"
-  admin action yet.
-- **No automated test suite.** Verification today is manual (see
-  `scripts/`) plus static checks (`python -m py_compile`, `pyflakes`) run
-  ad hoc; there is no `pytest` (or similar) suite in the repo.
+- **`handle_join_request` is dormant.** The bot's invite links use
+  `member_limit=1`, which never raises join requests. The handler is kept in
+  `members/main_group.py` as a safety net in case the invite strategy changes.
+- **Intent classification is skipped when every required tag is present.**
+  A post that tags every admin but is really a question is treated as an
+  onboarding submission.
+- **Unlinked old-website members who rejoin the main group are removed** once
+  `OWNER_USER_ID` is set, unless they come through the owner's link. Joins
+  are deliberately not matched against the spreadsheet by username: anyone
+  can take over a username a member has since dropped, and linking would hand
+  them that member's record.
+- **No automated test suite.** Verification is manual plus static checks.

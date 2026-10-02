@@ -9,17 +9,16 @@ Answers are collected here, never by the LLM: the collector stops each
 message before it can reach Alpha.
 """
 import logging
-from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, Forbidden
 from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
-from config import ONBOARDING_GROUP_ID
 from src import db
-from src.files import send_file
-from src.kyc_fields import active_fields, field_by_key, label, needs_approval
-from src.validators import validate
+from src.common.telegram_helpers import send_file, start_link, who
+from src.config import ONBOARDING_GROUP_ID
+from src.kyc_form import (active_fields, display_value, field_by_key, label,
+                          needs_approval, validate)
 
 logger = logging.getLogger(__name__)
 # ===========================================================================
@@ -44,19 +43,6 @@ FINISHED = ("That's everything for now ✅\n\nAnything that needs an admin "
 STOPPED = "Paused. Send /profile whenever you want to carry on."
 # =================================================================================
 # ----- Helpers ----------------------------------------------------------------
-def pretty_value(field, row):
-  if row["file_ref"]:
-    return "on file"
-  value = row["value_text"] or "—"
-  if field["type"] == "day_month" and len(value) == 5:
-    try:
-      dt = datetime.strptime(f"2000-{value}", "%Y-%m-%d")
-      return f"{dt.day} {dt.strftime('%B')}"
-    except ValueError:
-      pass
-  return value
-
-
 def field_states(user_id):
   """[(field, row, state)] where state is ok / missing / review / pending."""
   answers = db.get_kyc_answers(user_id)
@@ -95,12 +81,12 @@ IN_SESSION = _InProfileSession()
 
 
 # ----- View -------------------------------------------------------------------
-
 async def send_not_active(bot, user_id):
   """Not active yet: say so, and offer the way in for existing members."""
   await bot.send_message(user_id, NOT_ACTIVE, reply_markup=InlineKeyboardMarkup([[
     InlineKeyboardButton("I'm already an ATL member",
-                         url=f"https://t.me/{bot.username}?start=link")]]))
+                         url=start_link(bot, "link"))]]))
+
 
 async def show_profile(bot, user_id):
   if not is_active(user_id):
@@ -111,7 +97,7 @@ async def show_profile(bot, user_id):
   lines = ["👤 YOUR ATL PROFILE", ""]
   for field, row, state in states:
     if state == "ok":
-      lines.append(f"✅ {label(field)}: {pretty_value(field, row)}")
+      lines.append(f"✅ {label(field)}: {display_value(field, row['value_text'], row['file_ref'])}")
     elif state == "pending":
       lines.append(f"⏳ {label(field)}: waiting for admin approval")
     elif state == "review":
@@ -275,7 +261,7 @@ async def handle_profile_message(update, context: ContextTypes.DEFAULT_TYPE):
     await _fail(bot, message, user.id, error)
     raise ApplicationHandlerStop
   if field["type"] == "day_month":
-    await message.reply_text(f"Got it: {pretty_value(field, {'file_ref': None, 'value_text': cleaned})}.")
+    await message.reply_text(f"Got it: {display_value(field, cleaned)}.")
   await _accept(bot, user.id, field, value_text=cleaned)
   raise ApplicationHandlerStop
 
@@ -325,16 +311,15 @@ async def handle_member_button(update, context: ContextTypes.DEFAULT_TYPE):
 # ----- Admin approval card -------------------------------------------------
 def _build_card(user_id, changes):
   member = db.get_member(user_id)
-  handle = f"@{member['username']}" if member["username"] else "(no username)"
-  name = f"{member['first_name'] or ''} {member['last_name'] or ''}".strip()
   lines = ["PROFILE DETAILS: awaiting approval", "",
-           f"Telegram: {name} {handle}", f"User ID: {user_id}", ""]
+           f"Telegram: {who(member)}", f"User ID: {user_id}", ""]
 
   buttons = []
   for c in changes:
     field = field_by_key(c["field_key"])
     name_ = label(field) if field else c["field_key"]
-    value = "📎 posted below" if c["file_ref"] else pretty_value(field, c) if field else c["value_text"]
+    value = ("📎 posted below" if c["file_ref"]
+             else display_value(field, c["value_text"]))
     if c["decision"] == "approved":
       status = f"✅ approved by {c['decided_by_name']}"
     elif c["decision"] == "rejected":

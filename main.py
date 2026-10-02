@@ -1,3 +1,11 @@
+"""Alpha's entry point: wires every feature's handlers into one bot and runs it.
+
+Telegram updates pass through handler groups in order: -1, then 0, then 1.
+Within a group, only the FIRST matching handler runs; a handler can also
+raise ApplicationHandlerStop to keep an update from reaching later groups.
+So the order below is the bot's priority list. Read it top to bottom to see
+who gets a message first.
+"""
 import logging
 
 from telegram import Update
@@ -7,17 +15,17 @@ from telegram.ext import (
   ChatJoinRequestHandler,
   ChatMemberHandler,
   CommandHandler,
-  ContextTypes,
   MessageHandler,
   filters,
 )
 
-from config import (BOT_TOKEN, INDUCTION_GROUP_ID, MAIN_GROUP_ID,
-                    ONBOARDING_GROUP_ID, OWNER_USER_ID)
-from src import db
-from src.modules import (admin, kyc, leadership, induction, legacy, membership,
-                         profile, profile_edit)
-from src.modules.alpha import handle_alpha_message
+from src import commands, db
+from src.assistant.chat import handle_alpha_message
+from src.common.cleanup import sweep_deletions
+from src.config import (BOT_TOKEN, INDUCTION_GROUP_ID, MAIN_GROUP_ID,
+                        ONBOARDING_GROUP_ID, OWNER_USER_ID)
+from src.members import legacy, main_group, profile, profile_edit
+from src.onboarding import access_review, induction, kyc
 # =========================================================================================
 
 logging.basicConfig(
@@ -28,67 +36,22 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-  payload = context.args[0] if context.args else None
-
-  if payload == "kyc":
-    user = update.effective_user
-    db.upsert_member(user.id, username=user.username,
-                     first_name=user.first_name, last_name=user.last_name)
-    await kyc.handle_kyc_entry(context.bot, user.id)
-    return
-
-  if payload == "link":
-    await legacy.handle_link_start(update, context)
-    return
-
-  member = db.get_member(update.effective_user.id)
-  if member is not None and member["status"] == db.STATUS_ACTIVE:
-    await profile.show_profile(context.bot, update.effective_user.id)
-    return
-
-  await update.message.reply_text(
-    "👋 Hi! I'm Alpha, an ATL task automation bot. Please use the link "
-    "shared in your ATL group so I know what to sign you up for."
-  )
-
-
-async def chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-  """Temporary helper: run inside a group to find its chat id."""
-  await update.message.reply_text(f"Chat ID: {update.effective_chat.id}")
-
-
-async def cmd_kyc(update, context):
-  user = update.effective_user
-  db.upsert_member(
-    user.id,
-    username=user.username,
-    first_name=user.first_name,
-    last_name=user.last_name,
-  )
-  await kyc.handle_kyc_entry(context.bot, user.id)
-
-
 async def on_error(update, context):
   logger.exception("Handler error", exc_info=context.error)
 
 
-
-def main() -> None:
-  db.init_db()
-
+def build_app() -> Application:
   app = Application.builder().token(BOT_TOKEN).build()
 
   if app.job_queue is None:
     logger.error("JobQueue unavailable — install python-telegram-bot[job-queue]")
   else:
-    app.job_queue.run_repeating(induction.sweep_deletions,
-                                interval=300, first=10)
+    app.job_queue.run_repeating(sweep_deletions, interval=300, first=10)
 
-  # ----- group -1: legacy member linking ------------------------------
+  # ----- group -1: legacy member linking (members/legacy.py) -------------
   # Runs before everything else, so by the time Alpha answers, a legacy
-  # member is already linked and active. Order matters within a group:
-  # only the first matching handler runs, so the contact handler goes first.
+  # member is already linked and active. The contact and Skip handlers come
+  # first: they stop the update, so a phone number never reaches KYC or the LLM.
   app.add_handler(
     MessageHandler(filters.ChatType.PRIVATE & filters.CONTACT,
                    legacy.handle_contact),
@@ -100,20 +63,20 @@ def main() -> None:
     group=-1,
   )
   app.add_handler(
-    # Join/leave notices aren't posts: a new joiner is handled by membership.py.
+    # Join/leave notices aren't posts: a new joiner is handled by main_group.py.
     MessageHandler((filters.Chat(MAIN_GROUP_ID) & ~filters.StatusUpdate.ALL)
                    | filters.ChatType.PRIVATE,
                    legacy.passive_link),
     group=-1,
   )
 
-  # ----- group 0: commands ---------------------------------------------
-  app.add_handler(CommandHandler("start", start), group=0)
-  app.add_handler(CommandHandler("chatid", chat_id), group=0)
-  app.add_handler(CommandHandler("kyc", cmd_kyc), group=0)   # TEMPORARY
+  # ----- group 0: commands (src/commands.py, members/profile.py) ---------
+  app.add_handler(CommandHandler("start", commands.start), group=0)
+  app.add_handler(CommandHandler("chatid", commands.chat_id), group=0)
+  app.add_handler(CommandHandler("kyc", commands.cmd_kyc), group=0)   # TEMPORARY
   app.add_handler(CommandHandler("profile", profile.cmd_profile), group=0)
 
-  # ----- group 0: induction group --------------------------------------
+  # ----- group 0: induction group (onboarding/induction.py) ---------------
   app.add_handler(
     MessageHandler(filters.Chat(INDUCTION_GROUP_ID)
                    & filters.StatusUpdate.NEW_CHAT_MEMBERS,
@@ -128,7 +91,7 @@ def main() -> None:
     CallbackQueryHandler(induction.handle_induction_decision,
                          pattern=r"^ind:"), group=0)
 
-  # ----- group 0: profile collector ------------------------------------
+  # ----- group 0: profile collector (members/profile.py) -----------------
   # Must come before the KYC collector: within a group only the first
   # matching handler runs, and IN_SESSION makes this one match only for
   # members part-way through filling their profile.
@@ -143,7 +106,7 @@ def main() -> None:
   app.add_handler(
     CallbackQueryHandler(profile.handle_change_decision, pattern=r"^pc:"), group=0)
 
-  # ----- group 0: profile edits ----------------------------------------
+  # ----- group 0: profile edits (members/profile_edit.py) ----------------
   # Same rule as above: before the KYC collector, and IN_EDIT keeps it from
   # matching anyone who isn't part-way through an edit.
   app.add_handler(
@@ -157,7 +120,9 @@ def main() -> None:
   app.add_handler(
     CallbackQueryHandler(profile_edit.handle_edit_decision, pattern=r"^pa:"), group=0)
 
-  # ----- group 0: KYC collector ----------------------------------------
+  # ----- group 0: KYC collector (onboarding/kyc.py) ----------------------
+  # Matches every private non-command message, but only acts for members
+  # mid-registration; anyone else falls through to Alpha in group 1.
   app.add_handler(
     MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND,
                    kyc.handle_kyc_message),
@@ -168,30 +133,32 @@ def main() -> None:
   app.add_handler(
     CallbackQueryHandler(kyc.handle_restart, pattern=r"^rst:"), group=0)
 
-  # ----- group 0: admin review -----------------------------------------
+  # ----- group 0: admin review of registrations (onboarding/access_review.py)
   app.add_handler(
-    CallbackQueryHandler(admin.handle_access_decision, pattern=r"^acc:"),
+    CallbackQueryHandler(access_review.handle_access_decision, pattern=r"^acc:"),
     group=0,
   )
   app.add_handler(
     MessageHandler(filters.Chat(ONBOARDING_GROUP_ID) & filters.REPLY & filters.TEXT,
-                   admin.handle_decline_reason),
+                   access_review.handle_decline_reason),
     group=0,
   )
 
-  app.add_handler(ChatJoinRequestHandler(induction.handle_join_request), group=0)
-
-  # ----- group 0: main-group gatekeeping (joins, leaves, removals) --------
+  # ----- group 0: main group joins, leaves, removals (members/main_group.py)
+  app.add_handler(ChatJoinRequestHandler(main_group.handle_join_request), group=0)
   app.add_handler(
-    ChatMemberHandler(membership.handle_main_group_member_update,
+    ChatMemberHandler(main_group.handle_main_group_member_update,
                       ChatMemberHandler.CHAT_MEMBER, chat_id=MAIN_GROUP_ID),
     group=0,
   )
+  if not MAIN_GROUP_ID:
+    logger.warning("MAIN_GROUP_ID is not set: legacy linking, invites and "
+                   "main-group checks are disabled. Set it in .env.")
   if not OWNER_USER_ID:
     logger.warning("OWNER_USER_ID is not set: unrecorded joins to the main "
                    "group will NOT be reversed. Set it in .env.")
 
-  # ----- group 1: Alpha LLM catch-all ----------------------------------
+  # ----- group 1: Alpha LLM catch-all (assistant/chat.py) -----------------
   app.add_handler(
     MessageHandler(
       filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
@@ -200,10 +167,13 @@ def main() -> None:
     group=1,
   )
 
-
   app.add_error_handler(on_error)
-  app.run_polling(allowed_updates=Update.ALL_TYPES)
+  return app
 
+
+def main() -> None:
+  db.init_db()
+  build_app().run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 # =====================================================

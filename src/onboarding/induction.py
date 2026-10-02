@@ -1,3 +1,5 @@
+"""The induction group: welcome new arrivals, catch the "I'm ready" post,
+and let admins approve it before registration (kyc.py) can begin."""
 import logging
 import re
 
@@ -6,16 +8,18 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from src import db
-from src.messages import WELCOME_INDUCTION, INDUCTION_POST_INCOMPLETE
-from config import (
+from src.assistant.context import context_for
+from src.assistant.llm import ask_alpha, classify_induction_intent
+from src.common.telegram_helpers import mention, message_link, start_link, who
+from src.config import (
   INDUCTION_GROUP_ID, ONBOARDING_GROUP_ID,
   INDUCTION_PINNED_URL, MIN_INDUCTION_SECONDS,
   WELCOME_DELETE_SECONDS, REMINDER_DELETE_SECONDS,
   REGISTRATION_PROMPT_DELETE_SECONDS,
   REQUIRED_TAGS,
 )
-from src.llm import ask_alpha, classify_induction_intent
-from src.modules.alpha import _context_for
+from src.members.main_group import REMOVED_TEXT
+from src.onboarding.messages import INDUCTION_POST_INCOMPLETE, WELCOME_INDUCTION
 # ===============================================================================
 logger = logging.getLogger(__name__)
 
@@ -26,15 +30,6 @@ GROUP_REPLY_CONTEXT = (
   f"point them to {INDUCTION_PINNED_URL}."
 )
 # ===============================================================================
-
-
-def _message_link(chat_id, message_id):
-  """Supergroup message link: strip the -100 prefix."""
-  return f"https://t.me/c/{str(chat_id).replace('-100', '', 1)}/{message_id}"
-
-
-def _mention(user_id, name):
-  return f'<a href="tg://user?id={user_id}">{name}</a>'
 
 
 def _humanise(seconds):
@@ -86,22 +81,6 @@ async def handle_new_member(update, context: ContextTypes.DEFAULT_TYPE):
                          WELCOME_DELETE_SECONDS)
 
 
-# --- not currently used: member_limit=1 links never raise join requests.
-# Kept as a safety net if the invite strategy ever changes.
-async def handle_join_request(update, context):
-  req = update.chat_join_request
-  user_id = req.from_user.id
-  member = db.get_member(user_id)
-
-  if member and member["status"] == db.STATUS_ACTIVE:
-    await context.bot.approve_chat_join_request(req.chat.id, user_id)
-    db.log_event(user_id, "joined_main_group")
-  else:
-    await context.bot.decline_chat_join_request(req.chat.id, user_id)
-    if member is not None:   # the audit table needs a member row to point at
-      db.log_event(user_id, "join_request_declined")
-
-
 # --- 2. catch the tag --------------------------------------------------
 def _bot_was_tagged(message, bot):
   """True if THIS bot was mentioned or replied to."""
@@ -137,8 +116,12 @@ async def handle_induction_post(update, context: ContextTypes.DEFAULT_TYPE):
     sent = await message.reply_text(
       "You've already been approved. Tap below to register with me.",
       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-        "Start registration",
-        url=f"https://t.me/{context.bot.username}?start=kyc")]]))
+        "Start registration", url=start_link(context.bot, "kyc"))]]))
+    _schedule_pair(message, sent, REMINDER_DELETE_SECONDS)
+    return
+
+  if status == db.STATUS_REMOVED:
+    sent = await message.reply_text(REMOVED_TEXT)
     _schedule_pair(message, sent, REMINDER_DELETE_SECONDS)
     return
 
@@ -159,7 +142,7 @@ async def handle_induction_post(update, context: ContextTypes.DEFAULT_TYPE):
   if intent == "question":
     reply = await ask_alpha(
       message.text,
-      context_note=_context_for(member) + GROUP_REPLY_CONTEXT,
+      context_note=context_for(member) + GROUP_REPLY_CONTEXT,
     )
     sent = await message.reply_text(reply, disable_web_page_preview=True)
     _schedule_pair(message, sent, REMINDER_DELETE_SECONDS)
@@ -209,9 +192,6 @@ async def send_summary_card(bot, app_id, observed_seconds):
   app = db.get_application(app_id)
   member = db.get_member(app["user_id"])
 
-  handle = f"@{member['username']}" if member["username"] else "(no username)"
-  name = f"{member['first_name'] or ''} {member['last_name'] or ''}".strip()
-
   if observed_seconds is None:
     timing = ("⏱ Time in group UNKNOWN — joined before the bot. "
               "Use your judgement.")
@@ -220,11 +200,11 @@ async def send_summary_card(bot, app_id, observed_seconds):
 
   text = (
     "INDUCTION REQUEST — awaiting review\n\n"
-    f"Telegram: {name} {handle}\n"
+    f"Telegram: {who(member)}\n"
     f"User ID: {app['user_id']}\n"
     f"{timing}\n\n"
     f"Read their post: "
-    f"{_message_link(app['source_chat_id'], app['source_message_id'])}"
+    f"{message_link(app['source_chat_id'], app['source_message_id'])}"
   )
 
   await bot.send_message(
@@ -241,21 +221,16 @@ async def send_summary_card(bot, app_id, observed_seconds):
 # --- 4. the decision ---------------------------------------------------
 async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
   query = update.callback_query
-  await query.answer()
-
   if query.message is None or query.message.chat.id != ONBOARDING_GROUP_ID:
+    await query.answer()
     return
 
   parts = (query.data or "").split(":")
-  if len(parts) < 3:
-    logger.warning("Unparseable induction callback: %r", query.data)
-    return
-
-  action = parts[1]
   try:
-    app_id = int(parts[2])
-  except ValueError:
-    logger.warning("Bad application id: %r", query.data)
+    action, app_id = parts[1], int(parts[2])
+  except (IndexError, ValueError):
+    logger.warning("Unparseable induction callback: %r", query.data)
+    await query.answer()
     return
 
   admin = query.from_user
@@ -266,6 +241,7 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer("Already handled.", show_alert=True)
     await query.edit_message_reply_markup(reply_markup=None)
     return
+  await query.answer()
 
   app = db.get_application(app_id)
   user_id = app["user_id"]
@@ -287,14 +263,13 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
       disable_web_page_preview=True)
     sent = await context.bot.send_message(
       chat_id=INDUCTION_GROUP_ID,
-      text=(f"{_mention(user_id, name)}, you've been approved. "
+      text=(f"{mention(user_id, name)}, you've been approved. "
             "Tap below to register with me privately."),
       parse_mode=ParseMode.HTML,
       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-        "Start registration",
-        url=f"https://t.me/{context.bot.username}?start=kyc")]]),
+        "Start registration", url=start_link(context.bot, "kyc"))]]),
     )
-    # Deleted as soon as they start registering (kyc.start_kyc), or after
+    # Deleted as soon as they start registering (kyc.py), or after
     # the fallback period if they never tap it.
     db.save_registration_prompt(user_id, sent.chat_id, sent.message_id)
     db.schedule_deletion(sent.chat_id, sent.message_id,
@@ -306,7 +281,7 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
       disable_web_page_preview=True)
     sent = await context.bot.send_message(
       chat_id=INDUCTION_GROUP_ID,
-      text=(f"{_mention(user_id, name)}, please spend more time with the "
+      text=(f"{mention(user_id, name)}, please spend more time with the "
             f"induction material: {INDUCTION_PINNED_URL}\n\n"
             "Tag me again when you're ready."),
       parse_mode=ParseMode.HTML,
@@ -314,17 +289,3 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
     )
     db.schedule_deletion(sent.chat_id, sent.message_id, REMINDER_DELETE_SECONDS)
 
-
-# ----- 5. sweep deletions ------------------------------------------------
-async def sweep_deletions(context: ContextTypes.DEFAULT_TYPE):
-  rows = db.due_deletions()
-  if not rows:
-    return
-  logger.info("Sweeping %d scheduled deletion(s)", len(rows))
-  for row in rows:
-    try:
-      await context.bot.delete_message(row["chat_id"], row["message_id"])
-    except Exception as e:
-      logger.warning("Could not delete %s in %s: %s",
-                     row["message_id"], row["chat_id"], e)
-    db.clear_deletion(row["id"])   # clear either way — don't retry forever

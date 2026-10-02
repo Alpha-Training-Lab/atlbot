@@ -1,17 +1,16 @@
 """LLM layer for Alpha — wraps the Gemini API."""
 
 import logging
-from pathlib import Path
 
-from config import GEMINI_API_KEY
 from google import genai
 from google.genai import errors, types
+
+from src.config import BASE_DIR, GEMINI_API_KEY
 # ========================================
 logger = logging.getLogger(__name__)
 
 _client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL = "gemini-3.5-flash"
-BASE_DIR = Path(__file__).resolve().parent.parent
 FALLBACK = (
   "I'm having trouble thinking clearly right now. "
   "Please try again in a moment, or ask an admin if it's urgent."
@@ -37,7 +36,7 @@ question — they are asking for information, help, a link, or anything else.
 One word only. No punctuation, no explanation."""
 
 
-# ----- Classification -----------------------------------------------------
+# ----- Conversation -------------------------------------------------------
 async def ask_alpha(message: str, context_note: str | None = None) -> str:
   """Send a member's message to Alpha and return a reply."""
   system = SYSTEM_INSTRUCTION
@@ -66,7 +65,7 @@ async def ask_alpha(message: str, context_note: str | None = None) -> str:
   except Exception:
     logger.exception("Unexpected error calling Gemini")
     return FALLBACK
-  
+
 
 # ----- Classification -----------------------------------------------------
 async def classify_induction_intent(message: str) -> str:

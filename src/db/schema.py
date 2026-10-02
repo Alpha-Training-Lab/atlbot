@@ -1,0 +1,180 @@
+"""Every table, in one place. init_db() runs this at startup; each statement
+is IF NOT EXISTS, so it is safe to run against an existing database.
+
+SQLite is the single source of truth. Excel is a generated export.
+"""
+# --- status values ---------------------------------------------------
+STATUS_PENDING_SUMMARY = "pending_summary"
+STATUS_PENDING_REVIEW  = "pending_review"
+STATUS_DECLINED        = "declined"
+STATUS_AWAITING_DM     = "awaiting_dm"
+STATUS_KYC_IN_PROGRESS = "kyc_in_progress"
+STATUS_PENDING_ACCESS  = "pending_access"
+STATUS_ACTIVE          = "active"
+STATUS_REMOVED         = "removed"
+
+ALL_STATUSES = (
+  STATUS_PENDING_SUMMARY, STATUS_PENDING_REVIEW, STATUS_DECLINED,
+  STATUS_AWAITING_DM, STATUS_KYC_IN_PROGRESS, STATUS_PENDING_ACCESS,
+  STATUS_ACTIVE, STATUS_REMOVED,
+)
+
+_STATUS_SQL_LIST = ", ".join(f"'{s}'" for s in ALL_STATUSES)
+
+SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS members (
+    user_id         INTEGER PRIMARY KEY,
+    username        TEXT,
+    first_name      TEXT,
+    last_name       TEXT,
+    status          TEXT NOT NULL DEFAULT '{STATUS_PENDING_SUMMARY}'
+                    CHECK (status IN ({_STATUS_SQL_LIST})),
+    kyc_field_index INTEGER NOT NULL DEFAULT 0,
+    kyc_attempts    INTEGER NOT NULL DEFAULT 0,
+    first_seen      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_members_status   ON members(status);
+CREATE INDEX IF NOT EXISTS idx_members_username ON members(username);
+
+CREATE TABLE IF NOT EXISTS applications (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id           INTEGER NOT NULL REFERENCES members(user_id),
+    summary_text      TEXT,
+    source_chat_id    INTEGER,
+    source_message_id INTEGER,
+    decision          TEXT CHECK (decision IN ('approved', 'declined')),
+    decided_by        INTEGER,
+    decided_at        TEXT,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_applications_user ON applications(user_id);
+
+CREATE TABLE IF NOT EXISTS member_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES members(user_id),
+    event         TEXT NOT NULL,
+    actor_user_id INTEGER,
+    note          TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_user ON member_events(user_id);
+
+CREATE TABLE IF NOT EXISTS kyc_responses (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES members(user_id),
+    field_key    TEXT NOT NULL,
+    value_text   TEXT,
+    file_ref     TEXT,
+    needs_review INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(user_id, field_key)
+);
+
+CREATE TABLE IF NOT EXISTS scheduled_deletions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id    INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    delete_at  TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_deletions_due
+  ON scheduled_deletions(delete_at);
+
+-- The induction-group "you've been approved, tap to register" post, kept so
+-- it can be deleted the moment the member starts registering.
+CREATE TABLE IF NOT EXISTS registration_prompts (
+    user_id    INTEGER PRIMARY KEY REFERENCES members(user_id),
+    chat_id    INTEGER NOT NULL,
+    message_id INTEGER NOT NULL
+);
+
+
+CREATE TABLE IF NOT EXISTS legacy_members (
+    legacy_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_row     INTEGER NOT NULL,
+    username_key   TEXT,
+    phone_key      TEXT,
+    linked_user_id INTEGER UNIQUE REFERENCES members(user_id),
+    linked_at      TEXT,
+    imported_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_legacy_username
+  ON legacy_members(username_key);
+
+CREATE INDEX IF NOT EXISTS idx_legacy_phone
+  ON legacy_members(phone_key);
+
+CREATE TABLE IF NOT EXISTS legacy_responses (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    legacy_id    INTEGER NOT NULL REFERENCES legacy_members(legacy_id),
+    field_key    TEXT NOT NULL,
+    value_text   TEXT,
+    needs_review INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(legacy_id, field_key)
+);
+
+-- A member filling in missing profile details. Kept apart from members.status
+-- so an active member who stops halfway is still active.
+CREATE TABLE IF NOT EXISTS profile_sessions (
+    user_id         INTEGER PRIMARY KEY REFERENCES members(user_id),
+    field_keys      TEXT NOT NULL,
+    position        INTEGER NOT NULL DEFAULT 0,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    card_message_id INTEGER,
+    started_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Profile details held until an admin approves them.
+CREATE TABLE IF NOT EXISTS pending_changes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL REFERENCES members(user_id),
+    field_key       TEXT NOT NULL,
+    value_text      TEXT,
+    file_ref        TEXT,
+    card_message_id INTEGER,
+    requested_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    decision        TEXT CHECK (decision IN ('approved', 'rejected')),
+    decided_by      INTEGER,
+    decided_by_name TEXT,
+    decided_at      TEXT
+);
+
+-- At most one undecided request per member per field.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_one_open
+  ON pending_changes(user_id, field_key) WHERE decision IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_pending_card
+  ON pending_changes(card_message_id);
+
+-- The current one-time main-group invite for an approved member who isn't
+-- in the group, so repeat messages re-send it instead of minting new ones.
+CREATE TABLE IF NOT EXISTS main_group_invites (
+    user_id     INTEGER PRIMARY KEY REFERENCES members(user_id),
+    invite_link TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
+);
+
+-- When someone not on record was last asked, in the main group, to update
+-- their details. Keyed by Telegram id: they may have no members row yet.
+CREATE TABLE IF NOT EXISTS group_prompts (
+    user_id     INTEGER PRIMARY KEY,
+    prompted_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- A member editing details already on file. draft holds the new values
+-- (JSON) until they confirm; nothing touches kyc_responses before that.
+CREATE TABLE IF NOT EXISTS edit_sessions (
+    user_id    INTEGER PRIMARY KEY REFERENCES members(user_id),
+    group_key  TEXT NOT NULL,
+    position   INTEGER NOT NULL DEFAULT 0,
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    draft      TEXT NOT NULL DEFAULT '{{}}',
+    started_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""

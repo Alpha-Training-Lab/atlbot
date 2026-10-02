@@ -29,6 +29,7 @@ env/
 .vscode/
 .idea/
 .DS_Store
+*.swp
 
 # Claude Code local settings (project-shared settings, if any, stay tracked)
 .claude/settings.local.json

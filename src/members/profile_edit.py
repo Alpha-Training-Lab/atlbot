@@ -19,12 +19,12 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import Forbidden
 from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
-from config import ONBOARDING_GROUP_ID
 from src import db
-from src.files import send_file
-from src.kyc_fields import active_fields, field_by_key, label, needs_approval
-from src.modules import profile
-from src.validators import validate
+from src.common.telegram_helpers import send_file, who
+from src.config import ONBOARDING_GROUP_ID
+from src.kyc_form import (active_fields, display_value, field_by_key, label,
+                          needs_approval, validate)
+from src.members import profile
 
 logger = logging.getLogger(__name__)
 # ===========================================================================
@@ -97,7 +97,7 @@ def _current(field, answers):
     return "nothing yet"
   if row["file_ref"]:
     return "a photo"
-  return profile.pretty_value(field, row)
+  return display_value(field, row["value_text"])
 
 
 class _InEditSession(filters.MessageFilter):
@@ -233,8 +233,7 @@ async def _confirm(bot, user_id):
     if new.get("file_ref"):
       new_text, changed = "the new photo you sent", True
     else:
-      new_text = profile.pretty_value(field, {"file_ref": None,
-                                              "value_text": new.get("value_text")})
+      new_text = display_value(field, new.get("value_text"))
       if row is None or row["needs_review"] or row["value_text"] != new.get("value_text"):
         changed = True
     lines.append(f"{label(field)}\n  From: {_current(field, answers)}\n  To: {new_text}")
@@ -353,14 +352,11 @@ async def handle_member_button(update, context: ContextTypes.DEFAULT_TYPE):
 
 def _card_text(user_id, fields, draft, answers):
   member = db.get_member(user_id)
-  handle = f"@{member['username']}" if member["username"] else "(no username)"
-  name = f"{member['first_name'] or ''} {member['last_name'] or ''}".strip()
   lines = ["PROFILE CHANGE: awaiting approval", "",
-           f"Telegram: {name} {handle}", f"User ID: {user_id}", ""]
+           f"Telegram: {who(member)}", f"User ID: {user_id}", ""]
   for f in fields:
     d = draft[f["key"]]
-    new = ("📎 posted below" if d["file_ref"]
-           else profile.pretty_value(f, {"file_ref": None, "value_text": d["value_text"]}))
+    new = "📎 posted below" if d["file_ref"] else display_value(f, d["value_text"])
     lines.append(f"{label(f)}\n  Current: {_current(f, answers)}\n  New: {new}")
   if any(f["key"] in CHECK_AGAINST_ID for f in fields):
     on_file = any(answers.get(k) and answers[k]["file_ref"]

@@ -1,25 +1,21 @@
-"""KYC collector — walks a member through the active field list in DM."""
+"""KYC collector — walks a member through the active field list in DM.
+
+Finished registrations go to admins via access_review.py."""
 import logging
-from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ApplicationHandlerStop
 
 from src import db
-from src.kyc_fields import active_fields
-from src.validators import validate
-from config import MAX_DECLINES, COOLDOWN_SECONDS
+from src.config import MAX_DECLINES, COOLDOWN_SECONDS
+from src.kyc_form import active_fields, display_value, validate
+from src.members.main_group import REMOVED_TEXT
+from src.onboarding.access_review import send_access_request
 # =====================================================================
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 # =====================================================================
-def _pretty_day_month(mmdd):
-  """'07-05' -> '5 July'"""
-  dt = datetime.strptime(f"2000-{mmdd}", "%Y-%m-%d")
-  return f"{dt.day} {dt.strftime('%B')}"
-
-
 def _format_wait(seconds):
   mins = int(seconds // 60)
   h, m = divmod(mins, 60)
@@ -28,6 +24,18 @@ def _format_wait(seconds):
   if h:
     return f"{h} hour{'s' if h > 1 else ''}"
   return f"{max(m, 1)} minute{'s' if m != 1 else ''}"
+
+
+def seconds_until_retry(user_id):
+  """How long a declined member must wait before registering again; 0 means
+  now. Below MAX_DECLINES they can retry straight away. From then on there
+  is a COOLDOWN_SECONDS wait after each decline."""
+  if db.count_events(user_id, "status:declined") < MAX_DECLINES:
+    return 0
+  elapsed = db.seconds_since_last_event(user_id, "status:declined")
+  if elapsed is None:
+    return 0
+  return max(0, COOLDOWN_SECONDS - elapsed)
 
 
 def _keyboard_for(field, field_index):
@@ -84,6 +92,11 @@ async def start_kyc(bot, user_id):
   await send_current_field(bot, user_id)
 
 
+async def _restart_after_decline(bot, user_id):
+  db.log_event(user_id, "kyc_restarted")
+  await start_kyc(bot, user_id)
+
+
 async def finish_kyc(bot, user_id):
   db.set_status(user_id, db.STATUS_PENDING_ACCESS)
   await bot.send_message(
@@ -92,8 +105,7 @@ async def finish_kyc(bot, user_id):
           "Your registration has gone to the admin team for final review. "
           "I'll message you here as soon as it's confirmed."),
   )
-  from src.modules import admin      # deferred: avoids a circular import
-  await admin.send_access_request(bot, user_id)
+  await send_access_request(bot, user_id)
 
 
 def _save_and_advance(user_id, field, idx, value_text=None,
@@ -120,23 +132,15 @@ async def handle_kyc_entry(bot, user_id):
     return
 
   if status == db.STATUS_DECLINED:
-    declines = db.count_events(user_id, "status:declined")
-    if declines >= MAX_DECLINES:
-      elapsed = db.seconds_since_last_event(user_id, "status:declined")
-      if elapsed is not None and elapsed < COOLDOWN_SECONDS:
-        await bot.send_message(
-          user_id,
-          "You've used all three attempts. You can try again in "
-          f"{_format_wait(COOLDOWN_SECONDS - elapsed)}, but please speak "
-          "to an admin in the induction group first.")
-        return
+    wait = seconds_until_retry(user_id)
+    if wait:
       await bot.send_message(
         user_id,
-        "You've used all three registration attempts. Please contact an "
-        "admin in the induction group.")
+        f"You've used all {MAX_DECLINES} attempts. You can try again in "
+        f"{_format_wait(wait)}, but please speak to an admin in the "
+        "induction group first.")
       return
-    db.log_event(user_id, "kyc_restarted")
-    await start_kyc(bot, user_id)
+    await _restart_after_decline(bot, user_id)
     return
 
   if status == db.STATUS_PENDING_ACCESS:
@@ -151,7 +155,11 @@ async def handle_kyc_entry(bot, user_id):
       user_id, "You're already a full member — nothing more to do here.")
     return
 
-  # pending_summary / pending_review / removed
+  if status == db.STATUS_REMOVED:
+    await bot.send_message(user_id, REMOVED_TEXT)
+    return
+
+  # pending_summary / pending_review
   await bot.send_message(
     user_id,
     "You're not ready for registration yet.\n\n"
@@ -222,7 +230,7 @@ async def handle_kyc_message(update, context: ContextTypes.DEFAULT_TYPE):
     _save_and_advance(user.id, field, idx, value_text=cleaned)
     if field["type"] == "day_month":
       await message.reply_text(
-        f"Got it — {_pretty_day_month(cleaned)}. "
+        f"Got it — {display_value(field, cleaned)}. "
         "If that's wrong, tell an admin once you're approved.")
     await send_current_field(context.bot, user.id)
     raise ApplicationHandlerStop
@@ -259,11 +267,11 @@ async def handle_kyc_choice(update, context: ContextTypes.DEFAULT_TYPE):
     logger.warning("Bad kyc callback_data: %r", query.data)
     return
 
-  if field_idx != member["kyc_field_index"]:
+  fields = active_fields()
+  if field_idx != member["kyc_field_index"] or field_idx >= len(fields):
     await query.edit_message_reply_markup(reply_markup=None)   # stale button
     return
 
-  fields = active_fields()
   field = fields[field_idx]
   options = field.get("options", [])
   if option_idx >= len(options):
@@ -279,44 +287,27 @@ async def handle_kyc_choice(update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_restart(update, context: ContextTypes.DEFAULT_TYPE):
-  """Routes 'rst:' button taps: 'begin' (any status) or 'full' (declined retry)."""
+  """Routes 'rst:' button taps: 'begin' (any status) or 'full' (declined retry).
+  Each path answers the button press exactly once: a second answer fails."""
   query = update.callback_query
-  await query.answer()
-
   user_id = query.from_user.id
 
   if query.data == "rst:begin":
+    await query.answer()
     await handle_kyc_entry(context.bot, user_id)
     return
 
   member = db.get_member(user_id)
   if member is None or member["status"] != db.STATUS_DECLINED:
+    await query.answer()
     return
 
-  declines = db.count_events(user_id, "status:declined")
-  if declines >= MAX_DECLINES:
-    elapsed = db.seconds_since_last_event(user_id, "status:declined")
-    if elapsed is not None and elapsed < COOLDOWN_SECONDS:
-      await query.answer(
-        f"You can try again in {_format_wait(COOLDOWN_SECONDS - elapsed)}.",
-        show_alert=True)
-      return
-    await query.edit_message_reply_markup(reply_markup=None)
-    await context.bot.send_message(
-      user_id,
-      "You've reached the limit of three registration attempts.\n\n"
-      "Please contact an admin in the induction group.")
+  wait = seconds_until_retry(user_id)
+  if wait:
+    await query.answer(f"You can try again in {_format_wait(wait)}.",
+                       show_alert=True)
     return
 
-  elapsed = db.seconds_since_last_event(user_id, "status:declined")
-  if elapsed is not None and elapsed < COOLDOWN_SECONDS:
-    await query.answer(
-      f"You can try again in {_format_wait(COOLDOWN_SECONDS - elapsed)}.",
-      show_alert=True)
-    return
-
-  db.log_event(user_id, "kyc_restarted")
-  db.set_status(user_id, db.STATUS_KYC_IN_PROGRESS)
-  db.advance_kyc(user_id, 0)
+  await query.answer()
   await query.edit_message_reply_markup(reply_markup=None)
-  await send_current_field(context.bot, user_id)
+  await _restart_after_decline(context.bot, user_id)

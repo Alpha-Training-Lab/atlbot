@@ -11,17 +11,16 @@ Two routes:
      The number is used for matching only and is never stored or logged.
 """
 import logging
-import re
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
                       ReplyKeyboardMarkup, ReplyKeyboardRemove, Update)
-from telegram.constants import ChatMemberStatus
-from telegram.error import TelegramError
 from telegram.ext import ApplicationHandlerStop, ContextTypes
 
-from config import MAIN_GROUP_ID
 from src import db
-from src.modules import profile
+from src.common.telegram_helpers import start_link
+from src.config import MAIN_GROUP_ID
+from src.members import profile
+from src.members.main_group import in_main_group
 
 logger = logging.getLogger(__name__)
 # ===========================================================================
@@ -58,37 +57,8 @@ OWN_NUMBER_ONLY = "Please use the button to share your own number."
 
 _AWAITING = "awaiting_link_contact"   # user_data flag: they tapped ?start=link
 _CHECKED = "legacy_checked"           # bot_data: user ids already checked this run
-_IN_GROUP = {ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR,
-             ChatMemberStatus.MEMBER}
 # ================================================================================================
-# ----- Normalisers ----------------------------------------------------------
-# These MUST match the ones in scripts/import_legacy.py, or nothing matches.
-def username_key(raw):
-  v = (raw or "").strip().lower().lstrip("@")
-  return v if re.fullmatch(r"[a-z0-9_]{5,32}", v) else None
-
-
-def phone_key(raw):
-  digits = re.sub(r"\D", "", raw or "")
-  return digits[-10:] if len(digits) >= 10 else None
-
-
 # ----- Helpers --------------------------------------------------------------
-async def _in_main_group(bot, user_id):
-  """A DM proves nothing about membership, so ask Telegram."""
-  if not MAIN_GROUP_ID:
-    logger.warning("MAIN_GROUP_ID is not set; legacy linking is disabled")
-    return False
-  try:
-    member = await bot.get_chat_member(MAIN_GROUP_ID, user_id)
-  except TelegramError:
-    logger.warning("Could not check main-group membership", exc_info=True)
-    return False
-  if member.status == ChatMemberStatus.RESTRICTED:
-    return bool(getattr(member, "is_member", False))
-  return member.status in _IN_GROUP
-
-
 def _link(legacy_id, user, method):
   return db.link_legacy(legacy_id, user.id, user.username,
                         user.first_name, user.last_name, method)
@@ -115,9 +85,9 @@ async def passive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return
 
   if user.username and not db.is_legacy_linked(user.id):
-    legacy_id = db.find_legacy_match("username_key", username_key(user.username))
+    legacy_id = db.find_legacy_match("username_key", db.username_key(user.username))
     if legacy_id is not None and (
-        chat.id == MAIN_GROUP_ID or await _in_main_group(context.bot, user.id)):
+        chat.id == MAIN_GROUP_ID or await in_main_group(context.bot, user.id)):
       if _link(legacy_id, user, "username"):
         logger.info("Legacy member linked via username (legacy_id=%s)", legacy_id)
         return
@@ -134,7 +104,7 @@ async def _prompt_in_group(update, context):
     return
   sent = await update.effective_message.reply_text(
     GROUP_PROMPT, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-      "Update my details", url=f"https://t.me/{context.bot.username}?start=link")]]))
+      "Update my details", url=start_link(context.bot, "link"))]]))
   db.mark_prompted(user.id)
   db.schedule_deletion(sent.chat_id, sent.message_id, PROMPT_DELETE_SECONDS)
 
@@ -151,7 +121,7 @@ async def handle_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # registered through the bot. Either way: straight to their profile.
     await profile.show_profile(context.bot, user.id)
     return
-  if not await _in_main_group(context.bot, user.id):
+  if not await in_main_group(context.bot, user.id):
     await message.reply_text(NOT_IN_MAIN_GROUP)
     return
   await ask_for_phone(update, context)
@@ -188,10 +158,10 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
   if db.is_legacy_linked(user.id):
     reply = ALREADY_LINKED
-  elif not await _in_main_group(context.bot, user.id):
+  elif not await in_main_group(context.bot, user.id):
     reply = NOT_IN_MAIN_GROUP
   else:
-    legacy_id = db.find_legacy_match("phone_key", phone_key(contact.phone_number))
+    legacy_id = db.find_legacy_match("phone_key", db.phone_key(contact.phone_number))
     if legacy_id is not None and _link(legacy_id, user, "phone"):
       logger.info("Legacy member linked via phone (legacy_id=%s)", legacy_id)
       reply = LINKED
@@ -220,7 +190,7 @@ async def handle_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return
   user = update.effective_user
   message = update.effective_message
-  if not await _in_main_group(context.bot, user.id):
+  if not await in_main_group(context.bot, user.id):
     reply = NOT_IN_MAIN_GROUP
   else:
     reply = _activate_without_record(user, "skip")
