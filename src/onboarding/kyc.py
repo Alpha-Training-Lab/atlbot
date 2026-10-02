@@ -245,7 +245,8 @@ async def handle_kyc_message(update, context: ContextTypes.DEFAULT_TYPE):
     _save_and_advance(user.id, field, idx, value_text=raw[:500],
                       needs_review=1)
     await context.bot.send_message(
-      user.id, "I'll pass that to an admin to check. Moving on.")
+      user.id, vouch.REFER_REGISTRATION if field["key"] == "vouch_username"
+      else "I'll pass that to an admin to check. Moving on.")
     await send_current_field(context.bot, user.id)
   else:
     await message.reply_text(error)

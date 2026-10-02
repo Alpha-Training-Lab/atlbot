@@ -81,6 +81,9 @@ def build_kyc_card(user_id, card_message_id=None):
     else:
       value = display_value(field, row["value_text"])
     flag = "  ⚠️ NEEDS REVIEW" if row and row["needs_review"] else ""
+    if flag and field["key"] == "vouch_username":
+      flag += (" (not found in ATL's records after 3 tries, so no vouch "
+               "was asked: please check with the member)")
     if field["key"] == "vouch_username" and req is not None:
       flag += "  " + _VOUCH_LINE[req["status"]]   # consent, right where the vouch is
     lines.append(f"{label(field)}: {value}{flag}")

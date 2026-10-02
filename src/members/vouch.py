@@ -41,6 +41,14 @@ NOT_A_USERNAME = ("That doesn't look like a Telegram username. "
                   "Please send it like @username.")
 NOT_YOURSELF = ("You can't vouch for yourself. Please give the username of the "
                 "ATL member who introduced you.")
+NOT_ON_RECORD = ("I can't find @{k} in ATL's records. Please double-check their "
+                 "username (it's the one on their Telegram profile, starting "
+                 "with @) and send it again.")
+REFER_REGISTRATION = ("I still can't find that username in ATL's records, so I've "
+                      "passed your vouch to an admin, who will sort it out with "
+                      "you. Moving on.")
+REFER_PROFILE = ("I still can't find that username in ATL's records. Please "
+                 "contact an ATL admin to sort out your vouch.")
 NOTHING_TO_CONFIRM = "There's nothing waiting for you to confirm right now. Thank you!"
 VOUCH_NOT_MEMBER = ("Thank you for getting in touch. Only full ATL members (in "
                     "the main ATL group) can vouch for someone, so I can't take "
@@ -57,14 +65,19 @@ _REASONS = {
 # ----- Checking the username a member gives -----------------------------------
 
 def check_vouch_username(user, raw):
-  """(cleaned, error). cleaned is '@name' when it's usable; otherwise error
-  says why. Run after the field's normal validation."""
+  """(cleaned, error). cleaned is '@name' when it's a usable username, not
+  the member's own, and on ATL's records; otherwise error says why. Run
+  after the field's normal validation."""
   key = db.username_key(raw)
   if key is None:
     return None, NOT_A_USERNAME
   own = getattr(user, "username", None)
   if own and db.username_key(own) == key:
     return None, NOT_YOURSELF
+  # Telegram can't tell a bot whether a person's username exists, so check
+  # ATL's own records. This is what stops a typo being tagged in the group.
+  if not db.username_on_record(key):
+    return None, NOT_ON_RECORD.format(k=key)
   return f"@{key}", None
 
 

@@ -256,9 +256,10 @@ async def _accept(bot, user_id, field, value_text=None, file_ref=None):
   await _ask_current(bot, user_id)
 
 
-async def _fail(bot, message, user_id, error_text):
+async def _fail(bot, message, user_id, error_text, field=None):
   if db.bump_profile_attempts(user_id) >= MAX_ATTEMPTS:
-    await message.reply_text(SKIPPED)
+    vouch_miss = field is not None and field["key"] == "vouch_username"
+    await message.reply_text(vouch.REFER_PROFILE if vouch_miss else SKIPPED)
     db.advance_profile_session(user_id)
     await _ask_current(bot, user_id)
   else:
@@ -290,7 +291,7 @@ async def handle_profile_message(update, context: ContextTypes.DEFAULT_TYPE):
     if file_ref:
       await _accept(bot, user.id, field, file_ref=file_ref)
     else:
-      await _fail(bot, message, user.id, NEED_PHOTO)
+      await _fail(bot, message, user.id, NEED_PHOTO, field)
     raise ApplicationHandlerStop
 
   if field["type"] == "choice":
@@ -298,7 +299,7 @@ async def handle_profile_message(update, context: ContextTypes.DEFAULT_TYPE):
     raise ApplicationHandlerStop
 
   if message.text is None:
-    await _fail(bot, message, user.id, NEED_TEXT)
+    await _fail(bot, message, user.id, NEED_TEXT, field)
     raise ApplicationHandlerStop
 
   ok, cleaned, error = validate(field, message.text)
@@ -306,7 +307,7 @@ async def handle_profile_message(update, context: ContextTypes.DEFAULT_TYPE):
     cleaned, error = vouch.check_vouch_username(user, message.text)
     ok = error is None
   if not ok:
-    await _fail(bot, message, user.id, error)
+    await _fail(bot, message, user.id, error, field)
     raise ApplicationHandlerStop
   if field["type"] == "day_month":
     await message.reply_text(f"Got it: {display_value(field, cleaned)}.")

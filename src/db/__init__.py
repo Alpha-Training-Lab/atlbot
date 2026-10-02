@@ -8,7 +8,7 @@ from src.db.schema import (
   STATUS_PENDING_SUMMARY, STATUS_REMOVED,
 )
 from src.db.members import (
-  count_events, find_member_by_username, get_member, log_event, seconds_since_last_event, set_status,
+  count_events, find_member_by_username, get_member, refresh_telegram_details, log_event, seconds_since_last_event, set_status,
   upsert_member,
 )
 from src.db.onboarding import (
@@ -37,6 +37,7 @@ from src.db.vouch import (
   cancel_vouch_requests, create_vouch_request, decide_vouch_request,
   get_vouch_request, latest_vouch_request, mark_vouch_nudged,
   open_requests_for_vouch, open_vouch_requests_with_age, set_vouch_contact,
+  username_on_record,
 )
 
 __all__ = [
@@ -62,5 +63,5 @@ __all__ = [
   "cancel_vouch_requests", "create_vouch_request", "decide_vouch_request",
   "get_vouch_request", "latest_vouch_request", "mark_vouch_nudged",
   "open_requests_for_vouch", "open_vouch_requests_with_age",
-  "set_vouch_contact",
+  "set_vouch_contact", "username_on_record", "refresh_telegram_details",
 ]

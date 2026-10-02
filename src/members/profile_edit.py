@@ -215,7 +215,9 @@ async def handle_edit_message(update, context: ContextTypes.DEFAULT_TYPE):
   if error:
     if field["type"] != "choice" and db.bump_edit_attempts(user.id) >= MAX_ATTEMPTS:
       db.end_edit_session(user.id)
-      await message.reply_text(GAVE_UP)
+      await message.reply_text(
+        f"{vouch.REFER_PROFILE} {GAVE_UP}" if field["key"] == "vouch_username"
+        else GAVE_UP)
     else:
       await message.reply_text(error)
     raise ApplicationHandlerStop

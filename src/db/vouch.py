@@ -116,3 +116,14 @@ def cancel_vouch_requests(user_id, purpose):
       "WHERE user_id = ? AND purpose = ? AND status = 'pending'",
       (user_id, purpose),
     )
+
+
+def username_on_record(vouch_key):
+  """Is this username an active ATL member's? The members table is the only
+  source of truth for validation; the old website's spreadsheet
+  (legacy_members) is a backlog and deliberately plays no part."""
+  with get_conn() as conn:
+    return conn.execute(
+      "SELECT 1 FROM members WHERE lower(username) = ? AND status = 'active' LIMIT 1",
+      (vouch_key,),
+    ).fetchone() is not None

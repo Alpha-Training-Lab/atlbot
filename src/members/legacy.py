@@ -67,7 +67,8 @@ def _link(legacy_id, user, method):
 # ----- Route 1: passive username match ---------------------------------------
 async def passive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
   """Group -1. Runs on main-group posts and DMs, before everything else.
-  Links people silently by username where it can. In the main group, anyone
+  Refreshes a known member's Telegram details (once per restart). Links
+  people silently by username where it can. In the main group, anyone
   still not on record gets a brief nudge to update their details. Never
   stops later handlers, so Alpha and KYC carry on as normal."""
   user = update.effective_user
@@ -81,6 +82,11 @@ async def passive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
   checked.add(user.id)
 
   member = db.get_member(user.id)
+  if member is not None:
+    # The members table is ATL's source of truth (a vouch is looked up by
+    # username there), so keep a known member's Telegram details current.
+    db.refresh_telegram_details(user.id, user.username, user.first_name,
+                                user.last_name)
   if member is not None and member["status"] == db.STATUS_ACTIVE:
     return
 

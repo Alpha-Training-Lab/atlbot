@@ -39,6 +39,25 @@ def upsert_member(user_id, username=None, first_name=None, last_name=None):
     )
 
 
+def refresh_telegram_details(user_id, username, first_name, last_name):
+  """Make a known member's stored Telegram details exactly match what Alpha
+  just saw, including clearing a username they've removed. A username
+  belongs to one person at a time, so it's cleared from anyone else's row.
+  Never creates a row and never touches status."""
+  with get_conn() as conn:
+    if username:
+      conn.execute(
+        "UPDATE members SET username = NULL, updated_at = datetime('now') "
+        "WHERE lower(username) = lower(?) AND user_id != ?",
+        (username, user_id),
+      )
+    conn.execute(
+      "UPDATE members SET username = ?, first_name = ?, last_name = ?, "
+      "updated_at = datetime('now') WHERE user_id = ?",
+      (username, first_name, last_name, user_id),
+    )
+
+
 def upsert_active(conn, user_id, username, first_name, last_name):
   """Create or refresh a member and set them active. Runs inside the
   caller's transaction, so it's committed (or not) with everything else."""

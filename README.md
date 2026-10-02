@@ -310,8 +310,22 @@ A silent vouch is reminded every `VOUCH_REMIND_SECONDS` (12h); after
   the member is told. The onboarding card shows the vouch as awaiting
   consent, then the outcome, but it never holds up the member's other details.
 
-Members can't name themselves, and a vouch username that isn't a valid
-Telegram username is refused at entry.
+At entry the username must be a valid Telegram username, not the member's
+own, and belong to an **active member in the members table**
+(`db.username_on_record`). The members table is the only source of truth for
+validation: the old website's spreadsheet (`legacy_members`) is a backlog to
+be deleted and plays no part. Telegram can't tell a bot whether a person's
+username exists, so this check is what stops a typo being tagged in the main
+group. Each miss asks the member to double-check; after 3, registration
+passes the vouch to an admin (flagged on the card, no vouch asked, Approve
+available) and the profile flows tell the member to contact an admin.
+
+Because lookups rely on stored usernames, `legacy.passive_link` refreshes a
+known member's Telegram details whenever Alpha sees them (a DM or a
+main-group post, once per restart), clearing a username they've dropped and
+taking it off anyone else's row. A genuine member who isn't active in the
+members table yet can't be named as a vouch until they are; the third-miss
+referral covers that case.
 
 ### Alpha, the assistant (`src/assistant/`)
 
