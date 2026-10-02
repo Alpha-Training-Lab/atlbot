@@ -5,8 +5,12 @@ Adding a field = add a dict here. Removing = set "active": False
 
 "edit" controls the member's profile:
   "self"     - saved as soon as the member types it
-  "approval" - held until an admin approves it (identity and vouch details)
+  "approval" - held until an admin approves it (identity details)
+  "vouch"    - held until the named vouch confirms (members/vouch.py)
 A field with no "edit" key is treated as "approval", the safe default.
+
+FIELD_GROUPS lists fields that only make sense answered or changed
+together. Registration, filling missing details and editing all use it.
 """
 from datetime import datetime
 
@@ -86,14 +90,14 @@ KYC_FIELDS = [
     },
     {
         "key": "vouch_name",
-        "label": "Vouch's name", "edit": "approval",
+        "label": "Vouch's name", "edit": "vouch",
         "prompt": "What is the full name of the person who introduced you to ATL?",
         "type": "text",
         "required": True, "active": True, "order": 100,
     },
     {
         "key": "vouch_username",
-        "label": "Vouch's username", "edit": "approval",
+        "label": "Vouch's username", "edit": "vouch",
         "prompt": "What is their Telegram username? e.g. @username",
         "type": "text",
         "required": True, "active": True, "order": 110,
@@ -139,8 +143,26 @@ def field_by_key(key):
     return None
 
 
+# Fields that only make sense answered or changed together.
+FIELD_GROUPS = {
+    "vouch": ("Who vouched for you", ["vouch_name", "vouch_username"]),
+    "id":    ("Your ID", ["id_type", "id_document", "id_with_face"]),
+}
+
+
+def group_of(field_key):
+    """The FIELD_GROUPS key a field belongs to, or None."""
+    return next((g for g, (_, keys) in FIELD_GROUPS.items() if field_key in keys), None)
+
+
 def needs_approval(field):
+    """Held rather than saved straight away (by an admin, or by the vouch)."""
     return field.get("edit", "approval") != "self"
+
+
+def needs_vouch(field):
+    """Held until the member's named vouch confirms, not an admin."""
+    return field.get("edit") == "vouch"
 
 
 def label(field):

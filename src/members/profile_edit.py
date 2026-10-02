@@ -22,20 +22,17 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 from src import db
 from src.common.telegram_helpers import send_file, who
 from src.config import ONBOARDING_GROUP_ID
-from src.kyc_form import (active_fields, display_value, field_by_key, label,
-                          needs_approval, validate)
-from src.members import profile
+from src.kyc_form import (FIELD_GROUPS, active_fields, display_value,
+                          field_by_key, label, needs_approval, needs_vouch,
+                          validate)
+from src.members import profile, vouch
 
 logger = logging.getLogger(__name__)
 # ===========================================================================
 
 MAX_ATTEMPTS = 3
 
-# Fields that only make sense changed together.
-GROUPS = {
-  "vouch": ("Who vouched for you", ["vouch_name", "vouch_username"]),
-  "id":    ("Your ID", ["id_type", "id_document", "id_with_face"]),
-}
+GROUPS = FIELD_GROUPS   # vouch and ID are each changed as one (kyc_form/fields.py)
 # A change to these is checked against the ID already on file, so that ID
 # is posted under the card for the admin to compare.
 CHECK_AGAINST_ID = {"full_name", "birthday"}
@@ -50,9 +47,10 @@ REJECT_REASONS = [
 
 # ----- Messages -------------------------------------------------------------
 MENU_TEXT = ("✏️ What would you like to change?\n\n"
-             "🔒 means an admin checks it before it changes.")
-ALREADY_PENDING = ("You already have a change to this waiting for approval. "
-                   "You can change it again once it's been reviewed.")
+             "🔒 means an admin checks it before it changes.\n"
+             "🤝 means your vouch confirms it before it changes.")
+ALREADY_PENDING = ("You already have a change to this waiting to be confirmed. "
+                   "You can change it again once that's settled.")
 CANCELLED = "No changes made."
 GAVE_UP = "Let's leave that for now. Your details are unchanged."
 SAME_AS_BEFORE = "That's the same as what's already on file, so there's nothing to change."
@@ -121,6 +119,8 @@ async def show_menu(bot, user_id):
   for g_key, g_label, fields in edit_groups():
     if any(f["key"] in pending for f in fields):
       text = f"⏳ {g_label}"
+    elif any(needs_vouch(f) for f in fields):
+      text = f"🤝 {g_label}"
     elif any(needs_approval(f) for f in fields):
       text = f"🔒 {g_label}"
     else:
@@ -171,12 +171,14 @@ async def _ask(bot, user_id):
   if len(fields) > 1:
     head += f" (step {position + 1} of {len(fields)})"
   text = f"{head}\n\nOn file now: {_current(field, answers)}\n\n{field['prompt']}"
-  if position == 0 and any(needs_approval(f) for f in fields):
+  if position == 0 and any(needs_vouch(f) for f in fields):
+    text += "\n\n🤝 Your vouch will be asked to confirm this before it changes."
+  elif position == 0 and any(needs_approval(f) for f in fields):
     text += "\n\n🔒 An admin checks this before it changes."
   await bot.send_message(user_id, text, reply_markup=_keyboard(field, position))
 
 
-def _read(field, message):
+def _read(field, message, user):
   """(value_text, file_ref, error). error is None when the answer is usable."""
   if field["type"] == "document":
     if message.photo:
@@ -189,6 +191,9 @@ def _read(field, message):
   if message.text is None:
     return None, None, profile.NEED_TEXT
   ok, cleaned, error = validate(field, message.text)
+  if ok and field["key"] == "vouch_username":
+    cleaned, error = vouch.check_vouch_username(user, message.text)
+    ok = error is None
   return (cleaned, None, None) if ok else (None, None, error)
 
 
@@ -206,7 +211,7 @@ async def handle_edit_message(update, context: ContextTypes.DEFAULT_TYPE):
     raise ApplicationHandlerStop
 
   field = group[2][session["position"]]
-  value_text, file_ref, error = _read(field, message)
+  value_text, file_ref, error = _read(field, message, user)
   if error:
     if field["type"] != "choice" and db.bump_edit_attempts(user.id) >= MAX_ATTEMPTS:
       db.end_edit_session(user.id)
@@ -244,7 +249,10 @@ async def _confirm(bot, user_id):
     return
 
   approval = any(needs_approval(f) for f in fields)
-  save = "✅ Send for approval" if approval else "✅ Save"
+  if any(needs_vouch(f) for f in fields):
+    save = "✅ Ask my vouch to confirm"
+  else:
+    save = "✅ Send for approval" if approval else "✅ Save"
   await bot.send_message(
     user_id, "Please check this before it's saved:\n\n" + "\n\n".join(lines),
     reply_markup=InlineKeyboardMarkup([[
@@ -270,6 +278,18 @@ async def _save(bot, user_id):
                          file_ref=d["file_ref"])
       db.log_event(user_id, "profile_edited", note=f["key"])
     await bot.send_message(user_id, SAVED)
+    return
+
+  if any(needs_vouch(f) for f in fields):
+    ids = [db.add_pending_change(user_id, f["key"], draft[f["key"]]["value_text"],
+                                 draft[f["key"]]["file_ref"], None)
+           for f in fields]
+    key = await vouch.request_for_profile(
+      bot, user_id, draft["vouch_username"]["value_text"])
+    await profile.post_card(bot, user_id, ids)   # for the onboarding team to see
+    await bot.send_message(
+      user_id, f"🤝 Sent to @{key} to confirm. Nothing changes on your profile "
+               "until they do, and I'll let you know when they answer.")
     return
 
   answers = db.get_kyc_answers(user_id)

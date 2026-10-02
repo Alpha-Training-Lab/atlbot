@@ -8,12 +8,13 @@ from telegram import (
   InlineKeyboardButton,
   InlineKeyboardMarkup,
 )
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import ContextTypes
 
 from src import db
 from src.common.telegram_helpers import send_file, who
-from src.config import COOLDOWN_SECONDS, MAX_DECLINES, ONBOARDING_GROUP_ID
+from src.config import (COOLDOWN_SECONDS, MAX_DECLINES, ONBOARDING_GROUP_ID,
+                        VOUCH_EXPIRE_SECONDS)
 from src.kyc_form import active_fields, display_value, label
 from src.members.main_group import invite_for
 from src.onboarding.messages import welcome_approved
@@ -34,7 +35,26 @@ _NOT_TOLD = ("⚠️ I couldn't message this member (they may have blocked me). 
              "Please contact them directly.")
 # ===========================================================================
 # --- card building ----------------------------------------------------
-def build_kyc_card(user_id):
+_VOUCH_LINE = {
+  "pending":    "⏳ awaiting consent (Approve unlocks when they say Yes)",
+  "yes":        "✅ consented",
+  "no":         "❌ said they do NOT vouch for this member",
+  "expired":    f"⌛ no answer within {VOUCH_EXPIRE_SECONDS // 3600} hours",
+  "not_member": "🚫 not in the main group, so can't vouch",
+  "cancelled":  "— request closed",
+}
+
+
+def _card_vouch_request(user_id, card_message_id):
+  """The consent request belonging to THIS card, if any. Cards from before
+  vouch consent existed, or with an unusable username, have none."""
+  if card_message_id is None:
+    return None
+  req = db.latest_vouch_request(user_id, "registration")
+  return req if req and req["card_message_id"] == card_message_id else None
+
+
+def build_kyc_card(user_id, card_message_id=None):
   member = db.get_member(user_id)
   answers = db.get_kyc_answers(user_id)
 
@@ -51,6 +71,7 @@ def build_kyc_card(user_id):
 
   lines.append("")
 
+  req = _card_vouch_request(user_id, card_message_id)
   for field in active_fields():
     row = answers.get(field["key"])
     if row is None:
@@ -60,6 +81,8 @@ def build_kyc_card(user_id):
     else:
       value = display_value(field, row["value_text"])
     flag = "  ⚠️ NEEDS REVIEW" if row and row["needs_review"] else ""
+    if field["key"] == "vouch_username" and req is not None:
+      flag += "  " + _VOUCH_LINE[req["status"]]   # consent, right where the vouch is
     lines.append(f"{label(field)}: {value}{flag}")
 
   return "\n".join(lines)
@@ -101,6 +124,33 @@ async def send_access_request(bot, user_id):
     reply_markup=_decision_keyboard(user_id),
   )
   await post_documents(bot, user_id, card.message_id)
+  return card.message_id
+
+
+async def refresh_card(bot, user_id, card_message_id):
+  """Redraw a registration card still awaiting a decision (the vouch
+  answered, say), keeping its buttons."""
+  member = db.get_member(user_id)
+  if member is None or member["status"] != db.STATUS_PENDING_ACCESS:
+    return
+  try:
+    await bot.edit_message_text(
+      chat_id=ONBOARDING_GROUP_ID, message_id=card_message_id,
+      text=build_kyc_card(user_id, card_message_id),
+      reply_markup=_decision_keyboard(user_id))
+  except BadRequest as e:
+    if "not modified" not in str(e).lower():
+      logger.warning("Could not refresh card %s: %s", card_message_id, e)
+
+
+async def decline_registration(bot, user_id, reason, card_message_id):
+  """Alpha declines on its own (the vouch said No, never answered, or isn't
+  a member): same path as an admin decline, so the member is told and can
+  register again."""
+  return await _finalise_decline(
+    bot, user_id, None, "Alpha (vouch check)", reason,
+    card_message_id=card_message_id,
+    card_text=build_kyc_card(user_id, card_message_id))
 
 
 def _document_rows(user_id):
@@ -148,6 +198,7 @@ async def _finalise_decline(bot, target_id, admin_id, admin_name, reason,
   body = card_text or build_kyc_card(target_id)
   db.set_status(target_id, db.STATUS_DECLINED,
                 actor_user_id=admin_id, note=reason)
+  db.cancel_vouch_requests(target_id, "registration")   # stop chasing the vouch
 
   declines = db.count_events(target_id, "status:declined")
   at_cap = declines >= MAX_DECLINES
@@ -216,6 +267,14 @@ async def handle_access_decision(update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer("Already handled.", show_alert=True)
     await query.edit_message_reply_markup(reply_markup=None)
     return
+
+  if action == "approve":
+    req = _card_vouch_request(target_id, query.message.message_id)
+    if req is not None and req["status"] != "yes":
+      await query.answer(f"Waiting for @{req['vouch_key']} to confirm they vouch "
+                         "for this member. Approve unlocks when they say Yes.",
+                         show_alert=True)
+      return
   await query.answer()
 
   if action == "approve":

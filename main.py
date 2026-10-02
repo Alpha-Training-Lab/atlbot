@@ -1,6 +1,6 @@
 """Alpha's entry point: wires every feature's handlers into one bot and runs it.
 
-Telegram updates pass through handler groups in order: -1, then 0, then 1.
+Telegram updates pass through handler groups in order: -2, -1, 0, then 1.
 Within a group, only the FIRST matching handler runs; a handler can also
 raise ApplicationHandlerStop to keep an update from reaching later groups.
 So the order below is the bot's priority list. Read it top to bottom to see
@@ -24,7 +24,7 @@ from src.assistant.chat import handle_alpha_message
 from src.common.cleanup import sweep_deletions
 from src.config import (BOT_TOKEN, INDUCTION_GROUP_ID, MAIN_GROUP_ID,
                         ONBOARDING_GROUP_ID, OWNER_USER_ID)
-from src.members import legacy, main_group, profile, profile_edit
+from src.members import legacy, main_group, profile, profile_edit, vouch
 from src.onboarding import access_review, induction, kyc
 # =========================================================================================
 
@@ -47,6 +47,15 @@ def build_app() -> Application:
     logger.error("JobQueue unavailable — install python-telegram-bot[job-queue]")
   else:
     app.job_queue.run_repeating(sweep_deletions, interval=300, first=10)
+    app.job_queue.run_repeating(vouch.sweep, interval=1800, first=60)
+
+  # ----- group -2: vouches making contact (members/vouch.py) -------------
+  # First of all: a named vouch's "Hi" is how Alpha learns who they are.
+  # Stops the update only when it asks them something.
+  app.add_handler(
+    MessageHandler(filters.ChatType.PRIVATE, vouch.on_private_message),
+    group=-2,
+  )
 
   # ----- group -1: legacy member linking (members/legacy.py) -------------
   # Runs before everything else, so by the time Alpha answers, a legacy
@@ -132,6 +141,10 @@ def build_app() -> Application:
     CallbackQueryHandler(kyc.handle_kyc_choice, pattern=r"^kyc:"), group=0)
   app.add_handler(
     CallbackQueryHandler(kyc.handle_restart, pattern=r"^rst:"), group=0)
+
+  # ----- group 0: a vouch's Yes / No (members/vouch.py) -----------------
+  app.add_handler(
+    CallbackQueryHandler(vouch.handle_answer, pattern=r"^vc:"), group=0)
 
   # ----- group 0: admin review of registrations (onboarding/access_review.py)
   app.add_handler(

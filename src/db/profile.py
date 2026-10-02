@@ -197,6 +197,37 @@ def decide_card_changes(card_message_id, decision, admin_id, admin_name,
   return rows
 
 
+def decide_changes(change_ids, decision, actor_id, actor_name, reason=None):
+  """Decide exactly these undecided changes in ONE transaction: a grouped
+  item (an ID) on a fill card, or a vouch's answer on held vouch details.
+  Returns the rows decided."""
+  if decision not in ("approved", "rejected"):
+    raise ValueError(f"Unknown decision: {decision}")
+  if not change_ids:
+    return []
+  marks = ",".join("?" * len(change_ids))
+  with get_conn() as conn:
+    rows = conn.execute(
+      f"SELECT * FROM pending_changes WHERE id IN ({marks}) AND decision IS NULL",
+      list(change_ids),
+    ).fetchall()
+    for row in rows:
+      conn.execute(
+        "UPDATE pending_changes SET decision = ?, decided_by = ?, "
+        "decided_by_name = ?, decided_at = datetime('now') WHERE id = ?",
+        (decision, actor_id, actor_name, row["id"]),
+      )
+      if decision == "approved":
+        _apply_change(conn, row)
+      note = row["field_key"] + (f"; reason: {reason}" if reason else "")
+      conn.execute(
+        "INSERT INTO member_events (user_id, event, actor_user_id, note) "
+        "VALUES (?, ?, ?, ?)",
+        (row["user_id"], f"profile_change_{decision}", actor_id, note),
+      )
+  return rows
+
+
 # --- edit sessions (change details already on file) ------------------
 def get_edit_session(user_id):
   with get_conn() as conn:

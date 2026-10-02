@@ -11,6 +11,16 @@ def get_member(user_id):
     ).fetchone()
 
 
+def find_member_by_username(username_key):
+  """The member whose stored Telegram username matches (case-insensitive)."""
+  with get_conn() as conn:
+    return conn.execute(
+      "SELECT * FROM members WHERE lower(username) = ? "
+      "ORDER BY updated_at DESC LIMIT 1",
+      (username_key,),
+    ).fetchone()
+
+
 def upsert_member(user_id, username=None, first_name=None, last_name=None):
   """Create if new, refresh Telegram details if not. Never touches status.
   COALESCE keeps existing values when an argument is omitted."""

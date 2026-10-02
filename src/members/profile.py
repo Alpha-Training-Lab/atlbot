@@ -1,9 +1,12 @@
 """Member profile: view your details, fill in what's missing.
 
 Any active member can use it; legacy members simply have more blanks.
-Fields marked "edit": "self" in kyc_fields.py are saved straight away.
-Everything else (identity and vouch details) is held in pending_changes
-until an admin in the onboarding group approves it.
+Fields marked "edit": "self" in kyc_form/fields.py are saved straight away.
+Identity details are held in pending_changes until an admin in the
+onboarding group approves them. Vouch details are held until the vouch
+consents (members/vouch.py): they appear on the same card for the onboarding
+team to see, with no buttons, and never hold up the other details.
+Grouped fields (FIELD_GROUPS) are always asked together.
 
 Answers are collected here, never by the LLM: the collector stops each
 message before it can reach Alpha.
@@ -17,8 +20,10 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 from src import db
 from src.common.telegram_helpers import send_file, start_link, who
 from src.config import ONBOARDING_GROUP_ID
-from src.kyc_form import (active_fields, display_value, field_by_key, label,
-                          needs_approval, validate)
+from src.kyc_form import (FIELD_GROUPS, active_fields, display_value,
+                          field_by_key, label, needs_approval, needs_vouch,
+                          validate)
+from src.members import vouch
 
 logger = logging.getLogger(__name__)
 # ===========================================================================
@@ -33,6 +38,9 @@ NOTHING_MISSING = "✅ Nothing is missing. Thank you."
 FILL_INTRO = ("Let's fill in your missing details, one at a time. "
               "Tap ⏸ Stop for now whenever you like and carry on later.")
 APPROVAL_NOTE = "\n\n(An admin checks this one before it's saved.)"
+VOUCH_NOTE = "\n\n🤝 Your vouch will be asked to confirm this."
+ID_KEYS = set(FIELD_GROUPS["id"][1])
+VOUCH_KEYS = set(FIELD_GROUPS["vouch"][1])
 NEED_PHOTO = "I need a photo for this one. Please send it as an image or a file."
 NEED_TEXT = "Please reply with text for this one."
 TAP_BUTTON = "Please tap one of the buttons above."
@@ -99,7 +107,8 @@ async def show_profile(bot, user_id):
     if state == "ok":
       lines.append(f"✅ {label(field)}: {display_value(field, row['value_text'], row['file_ref'])}")
     elif state == "pending":
-      lines.append(f"⏳ {label(field)}: waiting for admin approval")
+      waiting = "your vouch to confirm" if needs_vouch(field) else "admin approval"
+      lines.append(f"⏳ {label(field)}: waiting for {waiting}")
     elif state == "review":
       lines.append(f"⚠️ {label(field)}: needs updating")
     else:
@@ -143,7 +152,9 @@ async def _ask_current(bot, user_id):
     return
   field = field_by_key(keys[position])
   text = f"Missing detail {position + 1} of {len(keys)}\n\n{field['prompt']}"
-  if needs_approval(field):
+  if needs_vouch(field):
+    text += VOUCH_NOTE
+  elif needs_approval(field):
     text += APPROVAL_NOTE
   await bot.send_message(user_id, text,
                          reply_markup=_question_keyboard(field, position))
@@ -154,8 +165,15 @@ async def start_fill(bot, user_id):
     await send_not_active(bot, user_id)
     return
   db.end_edit_session(user_id)   # one flow at a time; an unconfirmed edit is dropped
-  keys = [f["key"] for f, _, s in field_states(user_id)
-          if s in ("missing", "review")]
+  states = field_states(user_id)
+  wanted = {f["key"] for f, _, s in states if s in ("missing", "review")}
+  pending = {f["key"] for f, _, s in states if s == "pending"}
+  for _, group in FIELD_GROUPS.values():
+    if pending & set(group):
+      wanted -= set(group)      # part of it is still being decided
+    elif wanted & set(group):
+      wanted |= set(group)      # e.g. one ID photo missing: redo the whole ID
+  keys = [f["key"] for f, _, _ in states if f["key"] in wanted]
   if not keys:
     await bot.send_message(user_id, NOTHING_MISSING)
     return
@@ -168,8 +186,10 @@ async def _finish(bot, user_id, text):
   session = db.get_profile_session(user_id)
   card_id = session["card_message_id"] if session else None
   db.end_profile_session(user_id)
+  vouch.discard_orphans(user_id)
   await bot.send_message(user_id, text)
   if card_id:
+    await _refresh_card(bot, card_id)   # the ID decision unlocks now
     await _maybe_notify_member(bot, user_id, card_id)
 
 
@@ -203,6 +223,31 @@ async def _submit(bot, user_id, field, value_text=None, file_ref=None):
   if file_ref:
     await send_file(bot, ONBOARDING_GROUP_ID, file_ref,
                     caption=f"{label(field)}, user {user_id}", reply_to=card_id)
+
+  if field["key"] == "vouch_username":
+    # On the card for the onboarding team to see; the vouch decides it.
+    key = await vouch.request_for_profile(bot, user_id, value_text)
+    await _refresh_card(bot, card_id)   # shows who is being asked
+    if key:
+      await bot.send_message(
+        user_id, f"🤝 I've asked @{key} to confirm they vouch for you. "
+                 "I'll let you know when they answer.")
+
+
+async def post_card(bot, user_id, change_ids):
+  """Post a card for changes held outside a fill session (an edit of the
+  vouch, say). Returns the card's message id."""
+  changes = [db.get_change(i) for i in change_ids]
+  text, markup = _build_card(user_id, changes)
+  sent = await bot.send_message(ONBOARDING_GROUP_ID, text, reply_markup=markup)
+  for i in change_ids:
+    db.attach_change_to_card(i, sent.message_id)
+  return sent.message_id
+
+
+async def refresh_card(bot, card_message_id):
+  """Redraw a profile card from the database (the vouch answered, say)."""
+  await _refresh_card(bot, card_message_id)
 
 
 async def _accept(bot, user_id, field, value_text=None, file_ref=None):
@@ -257,6 +302,9 @@ async def handle_profile_message(update, context: ContextTypes.DEFAULT_TYPE):
     raise ApplicationHandlerStop
 
   ok, cleaned, error = validate(field, message.text)
+  if ok and field["key"] == "vouch_username":
+    cleaned, error = vouch.check_vouch_username(user, message.text)
+    ok = error is None
   if not ok:
     await _fail(bot, message, user.id, error)
     raise ApplicationHandlerStop
@@ -309,28 +357,72 @@ async def handle_member_button(update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ----- Admin approval card -------------------------------------------------
+def _vouch_status(user_id, change):
+  if change["decision"] == "approved":
+    return f"✅ {change['decided_by_name']} (saved)"
+  if change["decision"] == "rejected":
+    return f"❌ {change['decided_by_name']} (not saved)"
+  req = db.latest_vouch_request(user_id, "profile")
+  if req is not None and req["status"] == "pending":
+    return f"⏳ awaiting @{req['vouch_key']}'s consent"
+  return "⏳ awaiting the vouch's consent"
+
+
 def _build_card(user_id, changes):
   member = db.get_member(user_id)
+  answers = db.get_kyc_answers(user_id)
   lines = ["PROFILE DETAILS: awaiting approval", "",
            f"Telegram: {who(member)}", f"User ID: {user_id}", ""]
 
   buttons = []
+  id_open = []
   for c in changes:
     field = field_by_key(c["field_key"])
     name_ = label(field) if field else c["field_key"]
     value = ("📎 posted below" if c["file_ref"]
              else display_value(field, c["value_text"]))
+    on_file = answers.get(c["field_key"])
+    if (c["decision"] is None and not c["file_ref"] and on_file
+        and on_file["value_text"] and on_file["value_text"] != c["value_text"]):
+      value += f" (on file now: {display_value(field, on_file['value_text'])})"
+
+    if c["field_key"] in VOUCH_KEYS:
+      # The vouch decides these, not an admin: shown, never buttoned.
+      lines.append(f"{name_}: {value}  {_vouch_status(user_id, c)}")
+      continue
     if c["decision"] == "approved":
       status = f"✅ approved by {c['decided_by_name']}"
     elif c["decision"] == "rejected":
       status = f"❌ rejected by {c['decided_by_name']}"
     else:
       status = "⏳"
-      buttons.append([
-        InlineKeyboardButton(f"✅ {name_}", callback_data=f"pc:a:{c['id']}"),
-        InlineKeyboardButton(f"❌ {name_}", callback_data=f"pc:r:{c['id']}"),
-      ])
+      if c["field_key"] in ID_KEYS:
+        id_open.append(c)
+      else:
+        buttons.append([
+          InlineKeyboardButton(f"✅ {name_}", callback_data=f"pc:a:{c['id']}"),
+          InlineKeyboardButton(f"❌ {name_}", callback_data=f"pc:r:{c['id']}"),
+        ])
     lines.append(f"{name_}: {value}  {status}")
+
+  if any(c["field_key"] in VOUCH_KEYS for c in changes):
+    lines += ["", "🤝 Vouch details are decided by the vouch's consent, "
+                  "not by admins, and don't hold up anything else."]
+
+  if id_open:
+    # The ID is approved or rejected as one, and only once the member has
+    # finished sending it, so a half-sent ID is never approved.
+    session = db.get_profile_session(user_id)
+    still_sending = session is not None and session["card_message_id"] == (
+      changes[0]["card_message_id"])
+    if still_sending:
+      lines += ["", "⏳ The member is still sending their ID details."]
+    else:
+      first = id_open[0]["id"]
+      buttons.append([
+        InlineKeyboardButton("✅ ID", callback_data=f"pc:ga:{first}"),
+        InlineKeyboardButton("❌ ID", callback_data=f"pc:gr:{first}"),
+      ])
 
   return "\n".join(lines), InlineKeyboardMarkup(buttons) if buttons else None
 
@@ -349,8 +441,11 @@ async def _refresh_card(bot, card_message_id):
 
 
 async def _maybe_notify_member(bot, user_id, card_message_id):
-  """Tell the member once: every item on the card decided, session over."""
-  changes = db.get_card_changes(card_message_id)
+  """Tell the member once: every admin item on the card decided, session
+  over. Vouch rows don't count: the vouch's answer has its own message, and
+  must not hold up this one."""
+  changes = [c for c in db.get_card_changes(card_message_id)
+             if c["field_key"] not in VOUCH_KEYS]
   if not changes or any(c["decision"] is None for c in changes):
     return
   session = db.get_profile_session(user_id)
@@ -374,7 +469,7 @@ async def _maybe_notify_member(bot, user_id, card_message_id):
 
 
 async def handle_change_decision(update, context: ContextTypes.DEFAULT_TYPE):
-  """pc:a:<change_id>, pc:r:<change_id> on the onboarding card."""
+  """pc:a|r:<change_id> for one item; pc:ga|gr:<change_id> for the whole ID."""
   query = update.callback_query
   if query.message is None or query.message.chat.id != ONBOARDING_GROUP_ID:
     await query.answer()
@@ -386,7 +481,7 @@ async def handle_change_decision(update, context: ContextTypes.DEFAULT_TYPE):
   parts = (query.data or "").split(":")
   action = parts[1] if len(parts) > 1 else ""
 
-  if action not in ("a", "r") or len(parts) != 3:
+  if action not in ("a", "r", "ga", "gr") or len(parts) != 3:
     await query.answer()
     return
   try:
@@ -395,8 +490,14 @@ async def handle_change_decision(update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     return
 
-  decision = "approved" if action == "a" else "rejected"
-  if not db.decide_change(change_id, decision, admin.id, admin_name):
+  decision = "approved" if action in ("a", "ga") else "rejected"
+  if action in ("ga", "gr"):
+    ids = [c["id"] for c in db.get_card_changes(card_id)
+           if c["decision"] is None and c["field_key"] in ID_KEYS]
+    done = bool(db.decide_changes(ids, decision, admin.id, admin_name))
+  else:
+    done = db.decide_change(change_id, decision, admin.id, admin_name)
+  if not done:
     await query.answer("Already decided.", show_alert=True)
   else:
     await query.answer("Approved." if decision == "approved" else "Rejected.")

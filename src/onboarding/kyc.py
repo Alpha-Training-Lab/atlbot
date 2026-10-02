@@ -9,6 +9,7 @@ from telegram.ext import ContextTypes, ApplicationHandlerStop
 from src import db
 from src.config import MAX_DECLINES, COOLDOWN_SECONDS
 from src.kyc_form import active_fields, display_value, validate
+from src.members import vouch
 from src.members.main_group import REMOVED_TEXT
 from src.onboarding.access_review import send_access_request
 # =====================================================================
@@ -105,7 +106,8 @@ async def finish_kyc(bot, user_id):
           "Your registration has gone to the admin team for final review. "
           "I'll message you here as soon as it's confirmed."),
   )
-  await send_access_request(bot, user_id)
+  card_message_id = await send_access_request(bot, user_id)
+  await vouch.request_for_registration(bot, user_id, card_message_id)
 
 
 def _save_and_advance(user_id, field, idx, value_text=None,
@@ -226,6 +228,9 @@ async def handle_kyc_message(update, context: ContextTypes.DEFAULT_TYPE):
     raise ApplicationHandlerStop
 
   ok, cleaned, error = validate(field, raw)
+  if ok and field["key"] == "vouch_username":
+    cleaned, error = vouch.check_vouch_username(user, raw)
+    ok = error is None
   if ok:
     _save_and_advance(user.id, field, idx, value_text=cleaned)
     if field["type"] == "day_month":

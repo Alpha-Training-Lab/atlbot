@@ -2,13 +2,15 @@
 
   ?start=kyc   registration (onboarding/kyc.py)
   ?start=link  "I'm already an ATL member" (members/legacy.py)
+  ?start=vouch a named vouch arriving from their main-group tag
+               (members/vouch.py asks them first, in group -2)
   no payload   an active member's profile, or a pointer to their group
 """
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from src import db
-from src.members import legacy, profile
+from src.members import legacy, profile, vouch
 from src.onboarding import kyc
 # ===========================================================================
 
@@ -29,6 +31,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
   if payload == "link":
     await legacy.handle_link_start(update, context)
+    return
+
+  if payload == "vouch":
+    # Anyone with an open request was already asked by vouch.on_private_message
+    # before this ran; reaching here means there's nothing to confirm.
+    await update.message.reply_text(vouch.NOTHING_TO_CONFIRM)
     return
 
   member = db.get_member(update.effective_user.id)

@@ -8,7 +8,7 @@ from src.db.schema import (
   STATUS_PENDING_SUMMARY, STATUS_REMOVED,
 )
 from src.db.members import (
-  count_events, get_member, log_event, seconds_since_last_event, set_status,
+  count_events, find_member_by_username, get_member, log_event, seconds_since_last_event, set_status,
   upsert_member,
 )
 from src.db.onboarding import (
@@ -24,6 +24,7 @@ from src.db.legacy import (
 from src.db.profile import (
   add_pending_change, advance_profile_session, attach_change_to_card,
   bump_edit_attempts, bump_profile_attempts, decide_card_changes, decide_change,
+  decide_changes,
   end_edit_session, end_profile_session, get_card_changes, get_change,
   get_edit_session, get_open_changes, get_profile_session, save_edit_draft,
   set_profile_card, start_edit_session, start_profile_session,
@@ -31,6 +32,11 @@ from src.db.profile import (
 from src.db.main_group import (
   activate_by_owner, clear_invite, get_invite, mark_prompted, save_invite,
   should_prompt,
+)
+from src.db.vouch import (
+  cancel_vouch_requests, create_vouch_request, decide_vouch_request,
+  get_vouch_request, latest_vouch_request, mark_vouch_nudged,
+  open_requests_for_vouch, open_vouch_requests_with_age, set_vouch_contact,
 )
 
 __all__ = [
@@ -52,5 +58,9 @@ __all__ = [
   "get_profile_session", "save_edit_draft", "set_profile_card",
   "start_edit_session", "start_profile_session", "activate_by_owner",
   "clear_invite", "get_invite", "mark_prompted", "save_invite",
-  "should_prompt",
+  "should_prompt", "find_member_by_username", "decide_changes",
+  "cancel_vouch_requests", "create_vouch_request", "decide_vouch_request",
+  "get_vouch_request", "latest_vouch_request", "mark_vouch_nudged",
+  "open_requests_for_vouch", "open_vouch_requests_with_age",
+  "set_vouch_contact",
 ]

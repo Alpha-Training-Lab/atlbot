@@ -55,5 +55,10 @@ OWNER_USER_ID = _int_env("OWNER_USER_ID")
 # group's invite link). Unset = they're told to contact an ATL admin.
 ONBOARDING_ENTRY_URL = os.environ.get("ONBOARDING_ENTRY_URL")
 
+# ----- Vouch consent ---------------------------------------
+VOUCH_REMIND_SECONDS = 12 * 3600      # nudge a silent vouch this often
+VOUCH_EXPIRE_SECONDS = 72 * 3600      # silence this long counts as No
+VOUCH_TAG_DELETE_SECONDS = 6 * 3600   # main-group "send me Hi" tag lifetime
+
 # ----- Group links -------------------------
 INDUCTION_PINNED_URL = os.environ.get("INDUCTION_GROUP_PINNED_MESSAGE")

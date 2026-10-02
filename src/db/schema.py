@@ -177,4 +177,24 @@ CREATE TABLE IF NOT EXISTS edit_sessions (
     draft      TEXT NOT NULL DEFAULT '{{}}',
     started_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- A member's request for their vouch to confirm them. The vouch is known
+-- by username until they contact Alpha, which reveals their Telegram id.
+CREATE TABLE IF NOT EXISTS vouch_requests (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL REFERENCES members(user_id),
+    vouch_key       TEXT NOT NULL,
+    vouch_user_id   INTEGER,
+    purpose         TEXT NOT NULL CHECK (purpose IN ('registration', 'profile')),
+    card_message_id INTEGER,
+    status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'yes', 'no', 'expired',
+                                      'not_member', 'cancelled')),
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    last_nudged_at  TEXT,
+    decided_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_vouch_open
+  ON vouch_requests(vouch_key, status);
 """

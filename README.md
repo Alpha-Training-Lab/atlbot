@@ -80,6 +80,7 @@ list:
 
 | Group | Handler | Claims |
 |------:|---------|--------|
+| −2 | `members/vouch.py` | A DM from someone's named vouch: their "Hi" is how Alpha learns who they are, so it asks them first (stopped there only when it asks) |
 | −1 | `members/legacy.py` | Shared phone numbers and Skip taps from the link flow (stopped there, so they never reach KYC or the LLM); silent username matching on main-group posts and DMs |
 | 0 | `src/commands.py`, `members/profile.py` | `/start`, `/profile`, `/kyc`, `/chatid` |
 | 0 | `onboarding/induction.py` | Everything in the induction group |
@@ -87,6 +88,7 @@ list:
 | 0 | `onboarding/kyc.py` | DMs from a member part-way through registration |
 | 0 | `onboarding/access_review.py` | Admin buttons and typed decline reasons in the onboarding group |
 | 0 | `members/main_group.py` | Joins, leaves and removals in the main group |
+| 0 | `members/vouch.py` | A vouch's Yes / No buttons (`vc:`) |
 | 1 | `assistant/chat.py` | Any private text nothing above claimed |
 
 The profile collectors must stay above the KYC collector: the KYC collector
@@ -195,8 +197,14 @@ on, so nobody gets stuck. When every question is answered, `finish_kyc` sets
 `build_kyc_card` posts every answer to the onboarding group (birthdays
 spelled out, e.g. "5 July", so `07-05` can't be misread as 7 May), with the
 member's ID photos posted as replies under the card, and **Approve /
-Decline** buttons (`acc:`).
+Decline** buttons (`acc:`). Once the card is up, the named vouch is asked to
+confirm (see *Vouch consent* below) and the card shows their answer.
 
+- The consent status sits on the card's vouch username line.
+- **Approve** is locked until the vouch says Yes; tapping it earlier just
+  explains why. Cards from before vouch consent existed, or whose vouch
+  username was unusable (flagged ⚠️ NEEDS REVIEW), have no request and can be
+  approved as before.
 - **Approve** sets `active` and DMs the member `welcome_approved()` with a
   single-use invite link from `members/main_group.invite_for`. The link is
   stored, so the member never ends up with two different ones. If the invite
@@ -253,21 +261,57 @@ are recognised instead of being sent through induction:
 ⏳, needing an update ⚠️ or missing ❌. The message deletes itself after 10
 minutes.
 
-**Fill in missing details** asks the gaps one at a time. Fields marked
-`"edit": "self"` in `src/kyc_form/fields.py` save straight away. Identity and
-vouch details go to a card in the onboarding group, where admins approve or
-reject each one before it's saved. The member is told the outcome once
-everything on the card is decided.
+**Fill in missing details** asks the gaps one at a time. Grouped fields
+(`FIELD_GROUPS` in `src/kyc_form/fields.py`) are always asked together: one
+missing ID photo means the whole ID is asked again. Fields marked
+`"edit": "self"` save straight away. Identity details go to a card in the
+onboarding group: name and birthday are approved or rejected one by one, the
+ID (type plus both photos) as one item, once the member has finished sending
+it. Vouch details appear on the same card for the onboarding team, marked
+"awaiting consent", with no buttons: the vouch decides them, and they never
+hold up the rest. The member is told the admins' outcome as soon as the admin
+items are decided, and the vouch's outcome separately.
 
 #### 7. Editing details on file (`profile_edit.py`)
 
 **Edit my details** opens a menu. Vouch name and username, and ID type plus
 both ID photos, are edited together, so an ID record is never half-changed.
 Every edit shows current → new and waits for the member to confirm.
-Self-edit fields save on confirm. Approval fields go to the onboarding group
-as one card, approved or rejected as a whole (a rejection carries a preset
-reason the member sees). Name and birthday changes post the member's current
-ID under the card to compare against.
+Self-edit fields save on confirm. Approval fields (🔒) go to the onboarding
+group as one card, approved or rejected as a whole (a rejection carries a
+preset reason the member sees). Name and birthday changes post the member's
+current ID under the card to compare against. A vouch change (🤝) is asked of
+the new vouch; the onboarding group gets a card showing it (and what's on
+file now) that updates itself when the vouch answers.
+
+#### 8. Vouch consent (`vouch.py`)
+
+A member names their vouch by Telegram username, at registration or later in
+their profile. The vouch must confirm, and must be a full ATL member (in the
+main group).
+
+Alpha can't look up someone's id from a username, and can't message anyone
+who hasn't started it. So it messages the vouch directly only when it already
+knows them and they're in the main group; otherwise it posts
+"@vouch, please send me Hi in your DM" in the main group (deleted after
+`VOUCH_TAG_DELETE_SECONDS`). Any DM from that username, a "Hi" or the tag's
+button, gets the question with ✅ Yes / ❌ No. A tap only counts from the
+account that was asked, still holding that username, still in the main group.
+
+A silent vouch is reminded every `VOUCH_REMIND_SECONDS` (12h); after
+`VOUCH_EXPIRE_SECONDS` (72h) silence counts as No.
+
+- **Registration:** Yes unlocks Approve. No, silence, or a vouch outside the
+  main group declines the registration automatically through the normal
+  decline path, so the member is told why and can register again naming a
+  different vouch (this counts as one of their attempts). An admin decline
+  stops the vouch being chased.
+- **Profile:** Yes saves the vouch details; anything else discards them and
+  the member is told. The onboarding card shows the vouch as awaiting
+  consent, then the outcome, but it never holds up the member's other details.
+
+Members can't name themselves, and a vouch username that isn't a valid
+Telegram username is refused at entry.
 
 ### Alpha, the assistant (`src/assistant/`)
 
@@ -283,6 +327,11 @@ prompt built once at startup from `resources/prompts/alpha_persona.md`
 FAQ). Errors are answered with a polite fallback, never a stack trace.
 `classify_induction_intent` is a separate, much cheaper call that returns one
 word, defaulting to "onboarding" on any error.
+
+### Repeating jobs
+
+`members/vouch.sweep` runs every 30 minutes: reminders and expiry for
+vouch requests (above).
 
 ### Scheduled message cleanup (`src/common/cleanup.py`)
 
@@ -316,7 +365,8 @@ atlbot/
 │   │   ├── main_group.py       # Joins, leaves, removals, invite links, "removed" text
 │   │   ├── legacy.py           # Recognising members from the old website
 │   │   ├── profile.py          # View details, fill in what's missing, per-field approval card
-│   │   └── profile_edit.py     # Change details on file, grouped approval card
+│   │   ├── profile_edit.py     # Change details on file, grouped approval card
+│   │   └── vouch.py            # The named vouch confirms; reminders and expiry
 │   │
 │   ├── assistant/              # Alpha, the LLM
 │   │   ├── chat.py             # DM catch-all
@@ -445,6 +495,7 @@ never half-applies.
 | `pending_changes` | Profile details waiting for admin approval, and the decision. |
 | `main_group_invites` | Each member's current one-time invite link, so it's re-sent rather than re-made. |
 | `group_prompts` | When someone was last nudged in the main group to update their details. |
+| `vouch_requests` | Each request for a vouch to confirm a member, who the vouch turned out to be, and the outcome (yes, no, expired, not a member, cancelled). |
 
 The database holds real member PII (names, phone numbers, addresses, ID
 photos by reference) and is gitignored. It must never be committed.
