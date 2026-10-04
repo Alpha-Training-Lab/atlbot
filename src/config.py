@@ -45,6 +45,9 @@ REQUIRED_TAGS = [
 INDUCTION_GROUP_ID = _int_env("INDUCTION_GROUP_ID")
 ONBOARDING_GROUP_ID = int(os.environ["ONBOARDING_GROUP_ID"] or 0)   # must be present
 MAIN_GROUP_ID = _int_env("MAIN_GROUP_ID")
+# Anyone in this group is automatically an admin (members/roles.py). Alpha
+# must be an admin there. Unset = nobody is made admin this way.
+LEADERSHIP_GROUP_ID = _int_env("LEADERSHIP_GROUP_ID")
 
 # ----- Main-group gatekeeping -------------------------
 # The one person allowed to add members without onboarding (the backdoor),

@@ -22,9 +22,10 @@ from telegram.ext import (
 from src import commands, db
 from src.assistant.chat import handle_alpha_message
 from src.common.cleanup import sweep_deletions
-from src.config import (BOT_TOKEN, INDUCTION_GROUP_ID, MAIN_GROUP_ID,
+from src.config import (BOT_TOKEN, INDUCTION_GROUP_ID, LEADERSHIP_GROUP_ID, MAIN_GROUP_ID,
                         ONBOARDING_GROUP_ID, OWNER_USER_ID)
-from src.members import legacy, main_group, profile, profile_edit, vouch
+from src.members import (legacy, main_group, profile, profile_edit, roles,
+                         special, vouch)
 from src.onboarding import access_review, induction, kyc
 # =========================================================================================
 
@@ -60,6 +61,11 @@ def build_app() -> Application:
   )
 
   # ----- group -1: legacy member linking (members/legacy.py) -------------
+  # The owner's picker answers come first, so nothing else treats them as a
+  # message (members/special.py, members/roles.py).
+  owner_dm = filters.User(user_id=OWNER_USER_ID) & filters.ChatType.PRIVATE
+  app.add_handler(MessageHandler(special.PICKED & owner_dm, special.handle_picked), group=-1)
+  app.add_handler(MessageHandler(roles.PICKED & owner_dm, roles.handle_picked), group=-1)
   # Runs before everything else, so by the time Alpha answers, a legacy
   # member is already linked and active. The contact and Skip handlers come
   # first: they stop the update, so a phone number never reaches KYC or the LLM.
@@ -86,6 +92,28 @@ def build_app() -> Application:
   app.add_handler(CommandHandler("chatid", commands.chat_id), group=0)
   app.add_handler(CommandHandler("kyc", commands.cmd_kyc), group=0)   # TEMPORARY
   app.add_handler(CommandHandler("profile", profile.cmd_profile), group=0)
+
+  # Owner only, in a private chat: the Legacy Members list
+  # (members/special.py) and roles (members/roles.py).
+  owner_dm = filters.User(user_id=OWNER_USER_ID) & filters.ChatType.PRIVATE
+  app.add_handler(CommandHandler("legacy", special.cmd_legacy, filters=owner_dm), group=0)
+  app.add_handler(CommandHandler("legacylist", special.cmd_legacylist, filters=owner_dm), group=0)
+  app.add_handler(CommandHandler("legacyremove", special.cmd_legacyremove, filters=owner_dm), group=0)
+  app.add_handler(CommandHandler("admin", roles.cmd_admin, filters=owner_dm), group=0)
+  app.add_handler(CommandHandler("admins", roles.cmd_admins, filters=owner_dm), group=0)
+  app.add_handler(CommandHandler("unadmin", roles.cmd_unadmin, filters=owner_dm), group=0)
+
+  # ----- group 0: the leadership group makes admins (members/roles.py) ----
+  app.add_handler(
+    MessageHandler(filters.Chat(LEADERSHIP_GROUP_ID) & ~filters.StatusUpdate.ALL,
+                   roles.handle_leadership_post),
+    group=0,
+  )
+  app.add_handler(
+    ChatMemberHandler(roles.handle_leadership_member_update,
+                      ChatMemberHandler.CHAT_MEMBER, chat_id=LEADERSHIP_GROUP_ID),
+    group=0,
+  )
 
   # ----- group 0: induction group (onboarding/induction.py) ---------------
   app.add_handler(

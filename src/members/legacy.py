@@ -19,7 +19,7 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes
 from src import db
 from src.common.telegram_helpers import start_link
 from src.config import MAIN_GROUP_ID
-from src.members import profile
+from src.members import profile, special
 from src.members.main_group import in_main_group
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,8 @@ async def passive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
   if user.id in checked:
     return   # one check per person per bot restart, not per message
   checked.add(user.id)
+
+  special.claim(user)   # on the owner's Legacy Member list? link them now
 
   member = db.get_member(user.id)
   if member is not None:

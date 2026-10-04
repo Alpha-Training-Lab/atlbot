@@ -50,6 +50,11 @@ def main():
                             "FROM pending_changes WHERE decision IS NULL "
                             "AND field_key NOT IN ('vouch_name', 'vouch_username')")
 
+    admins = one(conn, "SELECT COUNT(*) FROM member_roles WHERE role = 'admin'")
+    leader_admins = one(conn, "SELECT COUNT(*) FROM member_roles WHERE role = 'admin' "
+                              "AND source = 'leadership'")
+    specials = one(conn, "SELECT COUNT(*) FROM special_members WHERE user_id IS NOT NULL")
+    specials_waiting = one(conn, "SELECT COUNT(*) FROM special_members WHERE user_id IS NULL")
     vouch_open = one(conn, "SELECT COUNT(*) FROM vouch_requests WHERE status = 'pending'")
     vouch_24h = dict(conn.execute(
       f"SELECT status, COUNT(*) FROM vouch_requests WHERE decided_at > {DAY} "
@@ -63,6 +68,8 @@ def main():
   print(f"  registrations to review     {by_status.get('pending_access', 0):>5}")
   print(f"  part-way through onboarding {onboarding:>5}")
   print(f"  declined / removed          {by_status.get('declined', 0):>5} / {by_status.get('removed', 0)}")
+  print(f"  🛡 admins                    {admins:>5}   ({leader_admins} from the leadership group)")
+  print(f"  ⭐ Legacy Members            {specials:>5}   ({specials_waiting} waiting to be seen)")
   print()
   print("OLD-WEBSITE BACKLOG")
   pct = f"{100 * legacy_linked / legacy_total:.0f}%" if legacy_total else "-"

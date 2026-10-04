@@ -358,6 +358,58 @@ FAQ). Errors are answered with a polite fallback, never a stack trace.
 `classify_induction_intent` is a separate, much cheaper call that returns one
 word, defaulting to "onboarding" on any error.
 
+### Legacy Members: the owner's special list (`members/special.py`)
+
+Special individuals the owner adds by hand are active in ATL without going
+through induction, KYC or a vouch, and are tagged ⭐ Legacy Member on their
+profile and on profile cards. Owner only, in a private chat with Alpha:
+
+- `/legacy` shows a **Pick Legacy Members** button (Telegram's own user
+  picker, up to 10 at once). Telegram gives Alpha their ids directly, so
+  they're created, linked and active at once.
+- `/legacy @name @name2` adds by username. A bot can't turn a username into
+  an id, so each one waits until that person messages Alpha, posts in the
+  main group, or joins it; then they're linked and made active. A waiting
+  Legacy Member who joins the main group is never removed by the gatekeeper.
+- `/legacylist` shows who's on the list and who's still waiting. Only the
+  owner can see the list: the tag shows on the member's own profile, never on
+  admin cards.
+- `/legacyremove @name` takes someone off the list; their membership stays.
+
+Adding someone makes them active whatever their previous status: it's the
+owner's explicit choice. Picking from chats is the safer route, since a typed
+username is matched to whoever holds it when they're first seen. In the code
+this list is `special_members`, to keep it apart from `legacy_members`, the
+old website's backlog.
+
+### Roles (`members/roles.py`)
+
+Every member is an ordinary member unless they hold a role in
+`member_roles`; today the one role is **admin**, for resources ordinary
+members won't be able to reach. The owner (`OWNER_USER_ID`) is above roles:
+always passes, can't be demoted, and is the only person who can grant or
+remove one. Owner only, in a private chat with Alpha:
+
+- `/admin` shows a **Pick admins** button (Telegram's user picker), or
+  `/admin @name` for people already on record.
+- `/admins` lists them and where each role came from; `/unadmin @name` makes
+  someone an ordinary member again (their membership is unchanged).
+
+**The leadership group makes admins automatically.** With
+`LEADERSHIP_GROUP_ID` set and Alpha an admin in that group, anyone who joins
+it becomes an admin, and stops being one when they leave or are removed.
+Telegram can't list a group's members, so people already in the group are
+recognised the first time they post there (Alpha reads only who posted). A
+role the owner grants by hand outranks this and stays even if they leave the
+group; `/unadmin` won't remove a leadership-based role, since they'd get it
+back on their next post: remove them from the group instead.
+
+Granting a role makes the person active if they weren't. To gate a future
+feature, use the `ADMINS` filter on its handler, or `roles.is_admin()` inside
+a callback. Adding a new role means adding it to `ROLES` in `db/roles.py`; the
+table needs no change. Card buttons in the onboarding group are not
+role-gated yet: anyone in that group can still use them.
+
 ### What admins see
 
 Cards, photo captions, prompts and invite-link names identify a member by
@@ -411,6 +463,8 @@ atlbot/
 │   │   ├── legacy.py           # Recognising members from the old website
 │   │   ├── profile.py          # View details, fill in what's missing, per-field approval card
 │   │   ├── profile_edit.py     # Change details on file, grouped approval card
+│   │   ├── roles.py            # Member roles (admin); the ADMINS filter
+│   │   ├── special.py          # The owner's Legacy Members list
 │   │   └── vouch.py            # The named vouch confirms; reminders and expiry
 │   │
 │   ├── assistant/              # Alpha, the LLM
@@ -497,6 +551,7 @@ chat ID, add the bot to the group and send `/chatid` there.
 | `REQUIRED_TAGS` | Optional | `@ShemmyCypher,@Dr_evidence,@Epitome61` | Comma-separated handles an induction post must tag. |
 | `MIN_INDUCTION_SECONDS` | Optional | 10 days | Minimum time in the induction group before a post is accepted. |
 | `ATL_DB_PATH` | Optional | `<project root>/atl_bot.db` | Where the SQLite file lives; `~` is expanded. |
+| `LEADERSHIP_GROUP_ID` | No | 0 | Members of this group are automatically admins. Alpha must be an admin there. |
 | `ATL_BACKUP_BUCKET` | For backups | — | S3 bucket used by `scripts/backup_db.py`. |
 
 Blank values are treated as unset. These are fixed in `src/config.py` rather
@@ -544,6 +599,8 @@ never half-applies.
 | `group_prompts` | When someone was last nudged in the main group to update their details. |
 | `vouch_requests` | Each request for a vouch to confirm a member, who the vouch turned out to be, and the outcome (yes, no, expired, not a member, cancelled). |
 | `reason_prompts` | Which member an admin's "Other" decline prompt is about, so the prompt text needn't show their id. |
+| `special_members` | The owner's Legacy Members: linked by Telegram id, or waiting by username until first seen. |
+| `member_roles` | Roles beyond ordinary member (today: admin), and where each came from: the owner (`/admin`) or the leadership group. No row = ordinary member. |
 
 The database holds real member PII (names, phone numbers, addresses, ID
 photos by reference) and is gitignored. It must never be committed.

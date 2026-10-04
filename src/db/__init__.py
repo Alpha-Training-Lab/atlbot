@@ -42,6 +42,14 @@ from src.db.vouch import (
   open_requests_for_vouch, open_vouch_requests_with_age, set_vouch_contact,
   username_on_record,
 )
+from src.db.special import (
+  add_special, add_special_waiting, claim_special, is_special, list_specials,
+  remove_special,
+)
+from src.db.roles import (
+  ADMIN, FROM_LEADERSHIP, FROM_OWNER, MEMBER, ROLES, get_role, get_role_source,
+  grant_role, members_with_role, revoke_role,
+)
 
 __all__ = [
   "get_conn", "init_db", "ALL_STATUSES", "STATUS_ACTIVE",
@@ -66,7 +74,10 @@ __all__ = [
   "cancel_vouch_requests", "create_vouch_request", "decide_vouch_request",
   "get_vouch_request", "latest_vouch_request", "mark_vouch_nudged",
   "open_requests_for_vouch", "open_vouch_requests_with_age",
-  "pop_reason_prompt", "save_reason_prompt", "set_vouch_contact", "username_on_record", "refresh_telegram_details",
+  "ADMIN", "FROM_LEADERSHIP", "FROM_OWNER", "MEMBER", "ROLES", "get_role",
+  "get_role_source", "grant_role", "members_with_role",
+  "revoke_role", "add_special", "add_special_waiting", "claim_special", "is_special",
+  "list_specials", "remove_special", "pop_reason_prompt", "save_reason_prompt", "set_vouch_contact", "username_on_record", "refresh_telegram_details",
   "end_edit_session_if_idle", "end_profile_session_if_idle",
   "idle_edit_sessions", "idle_profile_sessions",
 ]

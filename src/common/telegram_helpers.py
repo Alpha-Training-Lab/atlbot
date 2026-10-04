@@ -1,6 +1,7 @@
 """Small Telegram helpers shared by every feature."""
 from telegram import ReplyParameters
 from telegram.error import BadRequest
+from telegram.ext import filters
 # ===========================================================================
 
 
@@ -17,6 +18,18 @@ def mention(user_id, name):
 def message_link(chat_id, message_id):
   """Supergroup message link: strip the -100 prefix."""
   return f"https://t.me/c/{str(chat_id).replace('-100', '', 1)}/{message_id}"
+
+
+class UsersPicked(filters.MessageFilter):
+  """Matches the answer to one particular "pick people" button, so several
+  pickers (Legacy Members, admins) can each have their own handler."""
+  def __init__(self, request_id):
+    super().__init__(name=f"UsersPicked({request_id})")
+    self.request_id = request_id
+
+  def filter(self, message):
+    shared = message.users_shared
+    return shared is not None and shared.request_id == self.request_id
 
 
 def handle_or_name(member):

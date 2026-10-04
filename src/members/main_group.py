@@ -19,6 +19,7 @@ from telegram.ext import ContextTypes
 
 from src import db
 from src.common.telegram_helpers import handle_or_name
+from src.members import special
 from src.config import (INVITE_TTL_SECONDS, MAIN_GROUP_ID, ONBOARDING_ENTRY_URL,
                         OWNER_USER_ID)
 
@@ -160,6 +161,8 @@ async def _alert_owner(bot, text):
 
 async def _on_join(bot, update, user):
   db.clear_invite(user.id)   # whatever link they had is spent
+  if special.claim(user):
+    return   # on the owner's Legacy Member list: linked, active, welcome
   member = db.get_member(user.id)
   if member is not None and member["status"] == db.STATUS_ACTIVE:
     return   # came through onboarding, or already recognised

@@ -208,4 +208,34 @@ CREATE TABLE IF NOT EXISTS reason_prompts (
     card_message_id INTEGER NOT NULL,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- The owner's hand-picked "Legacy Members": special individuals who are
+-- active without onboarding. user_id is NULL until Alpha knows who they are
+-- (added by typed username and not yet seen). Not to be confused with
+-- legacy_members, the old website's spreadsheet backlog.
+CREATE TABLE IF NOT EXISTS special_members (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER UNIQUE REFERENCES members(user_id),
+    username_key TEXT,
+    added_by     INTEGER,
+    added_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    linked_at    TEXT
+);
+
+-- One waiting entry per typed username.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_special_waiting
+  ON special_members(username_key) WHERE user_id IS NULL;
+
+-- Members with a role beyond ordinary member. No row = ordinary member.
+-- Roles are checked in code (db/roles.py ROLES), so adding one later needs
+-- no change here. The owner (OWNER_USER_ID) is above roles and not listed.
+-- source: 'owner' (granted with /admin; stays until the owner removes it)
+-- or 'leadership' (from being in the leadership group; goes when they leave).
+CREATE TABLE IF NOT EXISTS member_roles (
+    user_id    INTEGER PRIMARY KEY REFERENCES members(user_id),
+    role       TEXT NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'owner',
+    granted_by INTEGER,
+    granted_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """

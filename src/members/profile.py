@@ -108,6 +108,8 @@ async def show_profile(bot, user_id):
 
   states = field_states(user_id)
   lines = ["👤 YOUR ATL PROFILE", ""]
+  if db.is_special(user_id):
+    lines[1:1] = ["⭐ Legacy Member", ""]
   for field, row, state in states:
     if state == "ok":
       lines.append(f"✅ {label(field)}: {display_value(field, row['value_text'], row['file_ref'])}")
