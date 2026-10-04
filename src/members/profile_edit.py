@@ -21,7 +21,7 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
 from src import db
 from src.common.telegram_helpers import send_file, who
-from src.config import ONBOARDING_GROUP_ID
+from src.config import ONBOARDING_GROUP_ID, PROFILE_SESSION_IDLE_SECONDS
 from src.kyc_form import (COMPARE_WITH, FIELD_GROUPS, active_fields, display_value,
                           field_by_key, label, needs_approval, needs_vouch,
                           validate)
@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 # ===========================================================================
 
 MAX_ATTEMPTS = 3
+SWEEP_BATCH = 20   # idle edits closed per run
 
 GROUPS = FIELD_GROUPS   # changed together (kyc_form/fields.py)
 
@@ -50,6 +51,9 @@ ALREADY_PENDING = ("You already have a change to this waiting to be confirmed. "
 CANCELLED = "No changes made."
 GAVE_UP = "Let's leave that for now. Your details are unchanged."
 SAME_AS_BEFORE = "That's the same as what's already on file, so there's nothing to change."
+TIMED_OUT = (f"⏸ I've cancelled your edit, as I haven't heard from you in "
+             f"{PROFILE_SESSION_IDLE_SECONDS // 60} minutes. Nothing was changed. "
+             "Send /profile to try again.")
 USE_BUTTONS = "Please use the buttons above to save or cancel."
 SAVED = "✅ Saved."
 SENT_FOR_APPROVAL = ("📨 Sent for approval. Nothing on your profile changes "
@@ -361,6 +365,21 @@ async def handle_member_button(update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(f"{field['prompt']}\n\n✓ {options[option]}")
     db.save_edit_draft(user_id, field["key"], value_text=options[option])
     await _ask(bot, user_id)
+
+
+async def sweep_idle_sessions(context: ContextTypes.DEFAULT_TYPE):
+  """Repeating job: close edits with no answer for PROFILE_SESSION_IDLE_SECONDS.
+  The draft is dropped; nothing was saved, so nothing else needs tidying."""
+  for session in db.idle_edit_sessions(PROFILE_SESSION_IDLE_SECONDS, SWEEP_BATCH):
+    user_id = session["user_id"]
+    if not db.end_edit_session_if_idle(user_id, PROFILE_SESSION_IDLE_SECONDS):
+      continue   # they answered a moment ago
+    try:
+      await context.bot.send_message(user_id, TIMED_OUT)
+    except Forbidden:
+      logger.info("Member %s has blocked the bot; edit timeout not delivered", user_id)
+    except Exception:
+      logger.exception("Telling member %s their edit timed out failed", user_id)
 
 
 # ----- Admin side -------------------------------------------------------------

@@ -19,7 +19,7 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
 from src import db
 from src.common.telegram_helpers import send_file, start_link, who
-from src.config import ONBOARDING_GROUP_ID
+from src.config import ONBOARDING_GROUP_ID, PROFILE_SESSION_IDLE_SECONDS
 from src.kyc_form import (COMPARE_WITH, FIELD_GROUPS, active_fields, display_value,
                           field_by_key, label, needs_approval, needs_vouch,
                           validate)
@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 VIEW_DELETE_SECONDS = 10 * 60   # the profile view holds personal data
+SWEEP_BATCH = 10   # idle sessions closed per run: each may edit a card in one group
 
 # ----- Messages -------------------------------------------------------------
 NOT_ACTIVE = ("Your profile is for ATL members. If you're already in the main "
@@ -50,6 +51,9 @@ FINISHED = ("That's everything for now ✅\n\nAnything that needs an admin "
             "check is with them, and I'll message you once it's reviewed. "
             "Send /profile any time to see your details.")
 STOPPED = "Paused. Send /profile whenever you want to carry on."
+TIMED_OUT = (f"⏸ I've paused filling in your details, as I haven't heard from "
+             f"you in {PROFILE_SESSION_IDLE_SECONDS // 60} minutes. Send /profile "
+             "whenever you want to carry on.")
 # =================================================================================
 # ----- Helpers ----------------------------------------------------------------
 def field_states(user_id):
@@ -187,11 +191,34 @@ async def _finish(bot, user_id, text):
   session = db.get_profile_session(user_id)
   card_id = session["card_message_id"] if session else None
   db.end_profile_session(user_id)
+  await _after_session(bot, user_id, card_id, text)
+
+
+async def _after_session(bot, user_id, card_id, text):
+  """Tidy up once a fill session has ended, however it ended."""
   vouch.discard_orphans(user_id)
-  await bot.send_message(user_id, text)
+  try:
+    await bot.send_message(user_id, text)
+  except Forbidden:
+    logger.info("Member %s has blocked the bot; session end not delivered", user_id)
   if card_id:
     await _refresh_card(bot, card_id)   # the ID decision unlocks now
     await _maybe_notify_member(bot, user_id, card_id)
+
+
+async def sweep_idle_sessions(context: ContextTypes.DEFAULT_TYPE):
+  """Repeating job: close fill sessions with no answer for
+  PROFILE_SESSION_IDLE_SECONDS. Until then every DM the member sends is
+  taken as an answer, and their card shows them as still sending."""
+  for session in db.idle_profile_sessions(PROFILE_SESSION_IDLE_SECONDS, SWEEP_BATCH):
+    user_id = session["user_id"]
+    if not db.end_profile_session_if_idle(user_id, PROFILE_SESSION_IDLE_SECONDS):
+      continue   # they answered a moment ago
+    try:
+      await _after_session(context.bot, user_id, session["card_message_id"],
+                           TIMED_OUT)
+    except Exception:
+      logger.exception("Tidying up an idle profile session failed for %s", user_id)
 
 
 async def pause_fill(bot, user_id):

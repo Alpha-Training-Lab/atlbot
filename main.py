@@ -48,6 +48,8 @@ def build_app() -> Application:
   else:
     app.job_queue.run_repeating(sweep_deletions, interval=300, first=10)
     app.job_queue.run_repeating(vouch.sweep, interval=1800, first=60)
+    app.job_queue.run_repeating(profile.sweep_idle_sessions, interval=300, first=120)
+    app.job_queue.run_repeating(profile_edit.sweep_idle_sessions, interval=300, first=150)
 
   # ----- group -2: vouches making contact (members/vouch.py) -------------
   # First of all: a named vouch's "Hi" is how Alpha learns who they are.

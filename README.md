@@ -277,6 +277,12 @@ is holding the same ID. Vouch details appear on the same card for the onboarding
 hold up the rest. The member is told the admins' outcome as soon as the admin
 items are decided, and the vouch's outcome separately.
 
+While a session is open, every DM the member sends is taken as an answer.
+So a session with no answer for `PROFILE_SESSION_IDLE_SECONDS` (60 minutes)
+is closed, exactly as if they'd tapped ⏸ Stop: held vouch details with no
+vouch asked yet are dropped, the card updates, and the member is told to send
+`/profile` to carry on.
+
 #### 7. Editing details on file (`profile_edit.py`)
 
 **Edit my details** opens a menu. Vouch name and username are edited
@@ -290,6 +296,9 @@ under the card: both ID photos for a name change, the photo holding the ID
 for a new ID document, and the ID document for a new photo holding the ID. A vouch change (🤝) is asked of
 the new vouch; the onboarding group gets a card showing it (and what's on
 file now) that updates itself when the vouch answers.
+
+An edit with no answer for 60 minutes (`PROFILE_SESSION_IDLE_SECONDS`) is
+cancelled and its draft dropped; nothing was saved, and the member is told.
 
 #### 8. Vouch consent (`vouch.py`)
 
@@ -353,6 +362,11 @@ word, defaulting to "onboarding" on any error.
 
 `members/vouch.sweep` runs every 30 minutes: reminders and expiry for
 vouch requests (above).
+
+`members/profile.sweep_idle_sessions` and
+`members/profile_edit.sweep_idle_sessions` run every 5 minutes and close
+fill and edit sessions that have gone quiet (above). Fill sessions are closed
+10 at a time, since each may edit a card in the onboarding group.
 
 ### Scheduled message cleanup (`src/common/cleanup.py`)
 
@@ -478,7 +492,8 @@ chat ID, add the bot to the group and send `/chatid` there.
 Blank values are treated as unset. These are fixed in `src/config.py` rather
 than read from the environment: `MAX_DECLINES` (3), `COOLDOWN_SECONDS` (6h),
 `INVITE_TTL_SECONDS` (48h), `WELCOME_DELETE_SECONDS` (24h),
-`REMINDER_DELETE_SECONDS` (3h), `REGISTRATION_PROMPT_DELETE_SECONDS` (24h).
+`REMINDER_DELETE_SECONDS` (3h), `REGISTRATION_PROMPT_DELETE_SECONDS` (24h),
+`PROFILE_SESSION_IDLE_SECONDS` (60 minutes).
 
 ## Running the bot
 
@@ -512,8 +527,8 @@ never half-applies.
 | `registration_prompts` | The induction-group "tap to register" post, so it can be deleted once used. |
 | `scheduled_deletions` | Messages waiting for the cleanup job. |
 | `legacy_members`, `legacy_responses` | The old website's spreadsheet, and which Telegram user claimed each row. |
-| `profile_sessions` | Members part-way through filling in missing details. |
-| `edit_sessions` | Members part-way through an edit; the draft stays here until they confirm. |
+| `profile_sessions` | Members part-way through filling in missing details; `last_active_at` is their last answer. |
+| `edit_sessions` | Members part-way through an edit; the draft stays here until they confirm. `last_active_at` is their last answer. |
 | `pending_changes` | Profile details waiting for admin approval, and the decision. |
 | `main_group_invites` | Each member's current one-time invite link, so it's re-sent rather than re-made. |
 | `group_prompts` | When someone was last nudged in the main group to update their details. |

@@ -28,6 +28,8 @@ from src.db.profile import (
   end_edit_session, end_profile_session, get_card_changes, get_change,
   get_edit_session, get_open_changes, get_profile_session, save_edit_draft,
   set_profile_card, start_edit_session, start_profile_session,
+  end_edit_session_if_idle, end_profile_session_if_idle, idle_edit_sessions,
+  idle_profile_sessions,
 )
 from src.db.main_group import (
   activate_by_owner, clear_invite, get_invite, mark_prompted, save_invite,
@@ -64,4 +66,6 @@ __all__ = [
   "get_vouch_request", "latest_vouch_request", "mark_vouch_nudged",
   "open_requests_for_vouch", "open_vouch_requests_with_age",
   "set_vouch_contact", "username_on_record", "refresh_telegram_details",
+  "end_edit_session_if_idle", "end_profile_session_if_idle",
+  "idle_edit_sessions", "idle_profile_sessions",
 ]

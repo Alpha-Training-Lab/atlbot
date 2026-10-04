@@ -55,6 +55,11 @@ OWNER_USER_ID = _int_env("OWNER_USER_ID")
 # group's invite link). Unset = they're told to contact an ATL admin.
 ONBOARDING_ENTRY_URL = os.environ.get("ONBOARDING_ENTRY_URL")
 
+# ----- Profile sessions -------------------------------------
+# A "fill in missing details" or "edit my details" session with no answer
+# for this long is closed: until then every DM is taken as an answer.
+PROFILE_SESSION_IDLE_SECONDS = 60 * 60
+
 # ----- Vouch consent ---------------------------------------
 VOUCH_REMIND_SECONDS = 12 * 3600      # nudge a silent vouch this often
 VOUCH_EXPIRE_SECONDS = 72 * 3600      # silence this long counts as No

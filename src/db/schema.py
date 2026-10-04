@@ -127,7 +127,8 @@ CREATE TABLE IF NOT EXISTS profile_sessions (
     position        INTEGER NOT NULL DEFAULT 0,
     attempts        INTEGER NOT NULL DEFAULT 0,
     card_message_id INTEGER,
-    started_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    started_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    last_active_at  TEXT          -- last answer; idle sessions are closed
 );
 
 -- Profile details held until an admin approves them.
@@ -174,8 +175,9 @@ CREATE TABLE IF NOT EXISTS edit_sessions (
     group_key  TEXT NOT NULL,
     position   INTEGER NOT NULL DEFAULT 0,
     attempts   INTEGER NOT NULL DEFAULT 0,
-    draft      TEXT NOT NULL DEFAULT '{{}}',
-    started_at TEXT NOT NULL DEFAULT (datetime('now'))
+    draft          TEXT NOT NULL DEFAULT '{{}}',
+    started_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    last_active_at TEXT          -- last answer; idle sessions are closed
 );
 
 -- A member's request for their vouch to confirm them. The vouch is known

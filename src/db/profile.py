@@ -20,14 +20,15 @@ def start_profile_session(user_id, field_keys):
   with get_conn() as conn:
     conn.execute(
       """
-      INSERT INTO profile_sessions (user_id, field_keys)
-      VALUES (?, ?)
+      INSERT INTO profile_sessions (user_id, field_keys, last_active_at)
+      VALUES (?, ?, datetime('now'))
       ON CONFLICT(user_id) DO UPDATE SET
         field_keys      = excluded.field_keys,
         position        = 0,
         attempts        = 0,
         card_message_id = NULL,
-        started_at      = datetime('now')
+        started_at      = datetime('now'),
+        last_active_at  = datetime('now')
       """,
       (user_id, ",".join(field_keys)),
     )
@@ -36,8 +37,8 @@ def start_profile_session(user_id, field_keys):
 def advance_profile_session(user_id):
   with get_conn() as conn:
     conn.execute(
-      "UPDATE profile_sessions SET position = position + 1, attempts = 0 "
-      "WHERE user_id = ?",
+      "UPDATE profile_sessions SET position = position + 1, attempts = 0, "
+      "last_active_at = datetime('now') WHERE user_id = ?",
       (user_id,),
     )
 
@@ -45,7 +46,8 @@ def advance_profile_session(user_id):
 def bump_profile_attempts(user_id):
   with get_conn() as conn:
     conn.execute(
-      "UPDATE profile_sessions SET attempts = attempts + 1 WHERE user_id = ?",
+      "UPDATE profile_sessions SET attempts = attempts + 1, "
+      "last_active_at = datetime('now') WHERE user_id = ?",
       (user_id,),
     )
     row = conn.execute(
@@ -65,6 +67,40 @@ def set_profile_card(user_id, card_message_id):
 def end_profile_session(user_id):
   with get_conn() as conn:
     conn.execute("DELETE FROM profile_sessions WHERE user_id = ?", (user_id,))
+
+
+def idle_profile_sessions(seconds, limit):
+  """Fill sessions with no answer for `seconds`, longest-idle first."""
+  return _idle("profile_sessions", seconds, limit)
+
+
+def end_profile_session_if_idle(user_id, seconds):
+  """End the session only if it's still idle, so a member who answered a
+  moment ago keeps going. True if it was ended."""
+  return _end_if_idle("profile_sessions", user_id, seconds)
+
+
+# Both session tables measure idleness the same way: since the last answer,
+# or since the start if there hasn't been one.
+_IDLE_SINCE = "COALESCE(last_active_at, started_at) <= datetime('now', ?)"
+
+
+def _idle(table, seconds, limit):
+  with get_conn() as conn:
+    return conn.execute(
+      f"SELECT * FROM {table} WHERE {_IDLE_SINCE} "
+      "ORDER BY COALESCE(last_active_at, started_at) LIMIT ?",
+      (f"-{int(seconds)} seconds", limit),
+    ).fetchall()
+
+
+def _end_if_idle(table, user_id, seconds):
+  with get_conn() as conn:
+    cur = conn.execute(
+      f"DELETE FROM {table} WHERE user_id = ? AND {_IDLE_SINCE}",
+      (user_id, f"-{int(seconds)} seconds"),
+    )
+  return cur.rowcount == 1
 
 
 # --- pending changes (held for admin approval) -----------------------
@@ -240,13 +276,15 @@ def start_edit_session(user_id, group_key):
   with get_conn() as conn:
     conn.execute(
       """
-      INSERT INTO edit_sessions (user_id, group_key) VALUES (?, ?)
+      INSERT INTO edit_sessions (user_id, group_key, last_active_at)
+      VALUES (?, ?, datetime('now'))
       ON CONFLICT(user_id) DO UPDATE SET
-        group_key  = excluded.group_key,
-        position   = 0,
-        attempts   = 0,
-        draft      = '{}',
-        started_at = datetime('now')
+        group_key      = excluded.group_key,
+        position       = 0,
+        attempts       = 0,
+        draft          = '{}',
+        started_at     = datetime('now'),
+        last_active_at = datetime('now')
       """,
       (user_id, group_key),
     )
@@ -264,7 +302,7 @@ def save_edit_draft(user_id, field_key, value_text=None, file_ref=None):
     draft[field_key] = {"value_text": value_text, "file_ref": file_ref}
     conn.execute(
       "UPDATE edit_sessions SET draft = ?, position = position + 1, "
-      "attempts = 0 WHERE user_id = ?",
+      "attempts = 0, last_active_at = datetime('now') WHERE user_id = ?",
       (json.dumps(draft), user_id),
     )
 
@@ -272,7 +310,8 @@ def save_edit_draft(user_id, field_key, value_text=None, file_ref=None):
 def bump_edit_attempts(user_id):
   with get_conn() as conn:
     conn.execute(
-      "UPDATE edit_sessions SET attempts = attempts + 1 WHERE user_id = ?",
+      "UPDATE edit_sessions SET attempts = attempts + 1, "
+      "last_active_at = datetime('now') WHERE user_id = ?",
       (user_id,),
     )
     row = conn.execute(
@@ -284,3 +323,13 @@ def bump_edit_attempts(user_id):
 def end_edit_session(user_id):
   with get_conn() as conn:
     conn.execute("DELETE FROM edit_sessions WHERE user_id = ?", (user_id,))
+
+
+def idle_edit_sessions(seconds, limit):
+  """Edit sessions with no answer for `seconds`, longest-idle first."""
+  return _idle("edit_sessions", seconds, limit)
+
+
+def end_edit_session_if_idle(user_id, seconds):
+  """Like end_profile_session_if_idle, for edits."""
+  return _end_if_idle("edit_sessions", user_id, seconds)
