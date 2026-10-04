@@ -368,9 +368,16 @@ profile and on profile cards. Owner only, in a private chat with Alpha:
   picker, up to 10 at once). Telegram gives Alpha their ids directly, so
   they're created, linked and active at once.
 - `/legacy @name @name2` adds by username. A bot can't turn a username into
-  an id, so each one waits until that person messages Alpha, posts in the
-  main group, or joins it; then they're linked and made active. A waiting
-  Legacy Member who joins the main group is never removed by the gatekeeper.
+  an id, so each one waits until Alpha can trust the person holding that
+  username is the right one: they're **in the main group or the leadership
+  group** (they post there, join it, or message Alpha while Telegram confirms
+  they're in it), or they're **already an active member on record** and
+  message Alpha. Then they're linked and made active. A DM alone isn't
+  enough: anyone can take a username someone else has dropped, and linking
+  makes them an active member. An onboarding record isn't enough either,
+  since joining the induction group creates one. A waiting Legacy Member who
+  joins the main group is never removed by the gatekeeper. The picker has
+  none of this uncertainty, so prefer it.
 - `/legacylist` shows who's on the list and who's still waiting. Only the
   owner can see the list: the tag shows on the member's own profile, never on
   admin cards.

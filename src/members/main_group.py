@@ -162,7 +162,7 @@ async def _alert_owner(bot, text):
 async def _on_join(bot, update, user):
   db.clear_invite(user.id)   # whatever link they had is spent
   if special.claim(user):
-    return   # on the owner's Legacy Member list: linked, active, welcome
+    return   # a waiting Legacy Member, now in the main group: welcome
   member = db.get_member(user.id)
   if member is not None and member["status"] == db.STATUS_ACTIVE:
     return   # came through onboarding, or already recognised

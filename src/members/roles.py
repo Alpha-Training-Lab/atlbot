@@ -25,12 +25,14 @@ import logging
 
 from telegram import (KeyboardButton, KeyboardButtonRequestUsers,
                       ReplyKeyboardMarkup, ReplyKeyboardRemove)
+from telegram.constants import ChatMemberStatus
+from telegram.error import TelegramError
 from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
 from src import db
 from src.common.telegram_helpers import UsersPicked, handle_or_name
 from src.config import LEADERSHIP_GROUP_ID, OWNER_USER_ID
-from telegram.constants import ChatMemberStatus
+from src.members import special
 
 logger = logging.getLogger(__name__)
 # ===========================================================================
@@ -196,6 +198,18 @@ def _in_group(chat_member):
           and getattr(chat_member, "is_member", False))
 
 
+async def in_leadership_group(bot, user_id):
+  """Asks Telegram directly. False if it can't be checked, or
+  LEADERSHIP_GROUP_ID isn't set."""
+  if not LEADERSHIP_GROUP_ID:
+    return False
+  try:
+    return _in_group(await bot.get_chat_member(LEADERSHIP_GROUP_ID, user_id))
+  except TelegramError:
+    logger.warning("Could not check leadership-group membership", exc_info=True)
+    return False
+
+
 def _make_leader_admin(user):
   if user.is_bot or is_owner(user.id):
     return False
@@ -214,6 +228,7 @@ async def handle_leadership_post(update, context: ContextTypes.DEFAULT_TYPE):
   if user.id in seen:
     return
   seen.add(user.id)
+  special.claim(user)   # a waiting Legacy Member, seen in the leadership group
   if _make_leader_admin(user):
     logger.info("Leadership member made admin on first post")
 
@@ -226,6 +241,7 @@ async def handle_leadership_member_update(update, context: ContextTypes.DEFAULT_
   user = change.new_chat_member.user
   was, now = _in_group(change.old_chat_member), _in_group(change.new_chat_member)
   if not was and now:
+    special.claim(user)   # a waiting Legacy Member, now in the leadership group
     if _make_leader_admin(user):
       logger.info("Leadership member made admin on joining")
   elif was and not now:

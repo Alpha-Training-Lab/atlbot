@@ -94,6 +94,17 @@ def claim_special(user_id, username, first_name, last_name, username_key):
   return True
 
 
+def is_special_waiting(username_key):
+  """Is a typed username on the list, waiting for Alpha to see that person?"""
+  if not username_key:
+    return False
+  with get_conn() as conn:
+    return conn.execute(
+      "SELECT 1 FROM special_members WHERE user_id IS NULL AND username_key = ?",
+      (username_key,),
+    ).fetchone() is not None
+
+
 def is_special(user_id):
   with get_conn() as conn:
     return conn.execute(

@@ -19,7 +19,7 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes
 from src import db
 from src.common.telegram_helpers import start_link
 from src.config import MAIN_GROUP_ID
-from src.members import profile, special
+from src.members import profile, roles, special
 from src.members.main_group import in_main_group
 
 logger = logging.getLogger(__name__)
@@ -81,7 +81,16 @@ async def passive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return   # one check per person per bot restart, not per message
   checked.add(user.id)
 
-  special.claim(user)   # on the owner's Legacy Member list? link them now
+  # On the owner's Legacy Member list by typed username? A DM alone proves
+  # nothing (anyone can take a username someone else dropped), so they're
+  # only linked once trusted: see special.py. Cheapest checks first, and
+  # Telegram is only asked about people who are actually waiting.
+  if special.waiting_for(user) and (
+      chat.id == MAIN_GROUP_ID
+      or special.active_on_record(user)
+      or await in_main_group(context.bot, user.id)
+      or await roles.in_leadership_group(context.bot, user.id)):
+    special.claim(user)
 
   member = db.get_member(user.id)
   if member is not None:

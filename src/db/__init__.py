@@ -43,8 +43,8 @@ from src.db.vouch import (
   username_on_record,
 )
 from src.db.special import (
-  add_special, add_special_waiting, claim_special, is_special, list_specials,
-  remove_special,
+  add_special, add_special_waiting, claim_special, is_special,
+  is_special_waiting, list_specials, remove_special,
 )
 from src.db.roles import (
   ADMIN, FROM_LEADERSHIP, FROM_OWNER, MEMBER, ROLES, get_role, get_role_source,
@@ -76,7 +76,7 @@ __all__ = [
   "open_requests_for_vouch", "open_vouch_requests_with_age",
   "ADMIN", "FROM_LEADERSHIP", "FROM_OWNER", "MEMBER", "ROLES", "get_role",
   "get_role_source", "grant_role", "members_with_role",
-  "revoke_role", "add_special", "add_special_waiting", "claim_special", "is_special",
+  "revoke_role", "add_special", "add_special_waiting", "claim_special", "is_special", "is_special_waiting",
   "list_specials", "remove_special", "pop_reason_prompt", "save_reason_prompt", "set_vouch_contact", "username_on_record", "refresh_telegram_details",
   "end_edit_session_if_idle", "end_profile_session_if_idle",
   "idle_edit_sessions", "idle_profile_sessions",

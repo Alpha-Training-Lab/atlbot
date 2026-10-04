@@ -7,9 +7,19 @@ Owner-only commands, in a private chat with Alpha:
   /legacyremove @name     take someone off the list (their status stays)
 
 A bot can't turn a username into a Telegram id. Picking people from your
-chats gives Alpha the id at once. A typed username waits until that person
-messages Alpha, posts in the main group, or joins it (db.claim_special,
-called from legacy.passive_link and main_group).
+chats gives Alpha the id at once. A typed username waits until Alpha can
+trust that the person holding it is the right one, which means one of:
+
+  - they're in the main group: they post there, join it, or message Alpha
+    while Telegram confirms they're in it (legacy.passive_link, main_group)
+  - they're in the leadership group: they post there, join it, or message
+    Alpha while Telegram confirms they're in it (roles, legacy.passive_link)
+  - they're already an active member on record, and message Alpha
+    (legacy.passive_link)
+
+A username alone proves nothing: anyone can take one that someone else has
+dropped, and claiming makes them an active member. An onboarding record
+isn't enough either, since joining the induction group creates one.
 
 "Legacy Member" is what people see. In the code this is special_members,
 so it can't be confused with legacy_members (the old website's backlog).
@@ -33,8 +43,9 @@ TAG = "⭐ Legacy Member"
 HELP = ("⭐ Legacy Members are active in ATL without going through onboarding.\n\n"
         "Tap the button below to pick people from your chats: they're added "
         "straight away.\n\nOr send /legacy @username (several at once is fine). "
-        "Alpha links each one the first time they message Alpha, post in the "
-        "main group, or join it.\n\n/legacylist shows the list. "
+        "Alpha links each one once it can trust it's them: when they're in "
+        "the main or leadership group, or already an active member.\n\n"
+        "/legacylist shows the list. "
         "/legacyremove @username takes someone off it.")
 
 
@@ -74,8 +85,9 @@ async def cmd_legacy(update, context: ContextTypes.DEFAULT_TYPE):
   if now:
     lines.append("✅ Added and active now: " + ", ".join(now))
   if waiting:
-    lines.append("⏳ Added; Alpha will link them the first time they message "
-                 "Alpha, post in the main group, or join it: " + ", ".join(waiting))
+    lines.append("⏳ Added; Alpha will link them once it sees them in the main "
+                 "or leadership group, or they message Alpha as an active "
+                 "member: " + ", ".join(waiting))
   if already:
     lines.append("Already on the list: " + ", ".join(already))
   if bad:
@@ -138,9 +150,23 @@ async def cmd_legacyremove(update, context: ContextTypes.DEFAULT_TYPE):
   await update.message.reply_text("\n\n".join(lines))
 
 
+def waiting_for(user):
+  """Is this Telegram user's username on the list, waiting to be linked?"""
+  if user is None or user.is_bot or not user.username:
+    return False
+  return db.is_special_waiting(db.username_key(user.username))
+
+
+def active_on_record(user):
+  """Already an active member in the members table (vetted already)."""
+  member = db.get_member(user.id)
+  return member is not None and member["status"] == db.STATUS_ACTIVE
+
+
 def claim(user):
-  """Alpha has just seen this Telegram user. True if a waiting entry for
-  their username was waiting for them (they're now linked and active)."""
+  """Link a waiting typed username to this Telegram user. Callers must have
+  established trust first (see the module docstring). True if an entry was
+  waiting for them (they're now linked and active)."""
   if user is None or user.is_bot or not user.username:
     return False
   claimed = db.claim_special(user.id, user.username, user.first_name,
