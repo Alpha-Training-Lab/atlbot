@@ -262,25 +262,32 @@ are recognised instead of being sent through induction:
 minutes.
 
 **Fill in missing details** asks the gaps one at a time. Grouped fields
-(`FIELD_GROUPS` in `src/kyc_form/fields.py`) are always asked together: one
-missing ID photo means the whole ID is asked again. Fields marked
-`"edit": "self"` save straight away. Identity details go to a card in the
-onboarding group: name and birthday are approved or rejected one by one, the
-ID (type plus both photos) as one item, once the member has finished sending
-it. Vouch details appear on the same card for the onboarding team, marked
+(`FIELD_GROUPS` in `src/kyc_form/fields.py`) are always asked together: ID
+type with the ID document, and vouch name with vouch username. The photo
+holding the ID is separate, since members often send one photo without the
+other. Fields marked `"edit": "self"` save straight away (birthday is
+self-edit: it's for celebrations and isn't verified). Identity details go to
+a card in the onboarding group: full name and the photo holding the ID are
+approved or rejected one by one, and the ID document (type plus photo) as one
+item once both have arrived. Whatever the admin should compare against is
+posted under the card from what's on file (`COMPARE_WITH`): the ID for a
+name, and each ID photo for the other, so the admin can check the face photo
+is holding the same ID. Vouch details appear on the same card for the onboarding team, marked
 "awaiting consent", with no buttons: the vouch decides them, and they never
 hold up the rest. The member is told the admins' outcome as soon as the admin
 items are decided, and the vouch's outcome separately.
 
 #### 7. Editing details on file (`profile_edit.py`)
 
-**Edit my details** opens a menu. Vouch name and username, and ID type plus
-both ID photos, are edited together, so an ID record is never half-changed.
+**Edit my details** opens a menu. Vouch name and username are edited
+together, as are ID type and the ID document; the photo holding the ID is
+its own item.
 Every edit shows current → new and waits for the member to confirm.
 Self-edit fields save on confirm. Approval fields (🔒) go to the onboarding
 group as one card, approved or rejected as a whole (a rejection carries a
-preset reason the member sees). Name and birthday changes post the member's
-current ID under the card to compare against. A vouch change (🤝) is asked of
+preset reason the member sees). What's on file to compare against is posted
+under the card: both ID photos for a name change, the photo holding the ID
+for a new ID document, and the ID document for a new photo holding the ID. A vouch change (🤝) is asked of
 the new vouch; the onboarding group gets a card showing it (and what's on
 file now) that updates itself when the vouch answers.
 
@@ -413,6 +420,7 @@ atlbot/
 ├── scripts/                    # Standalone tools, run by hand or on a schedule
 │   ├── import_legacy.py        # One-time import of the old website's spreadsheet
 │   ├── backup_db.py            # Nightly backup to S3
+│   ├── stats.py                # Read-only snapshot, counts only
 │   └── list_model.py           # List Gemini models for the API key
 │
 ├── data/                       # gitignored: local exports and backups
@@ -534,6 +542,8 @@ Standalone tools in `scripts/`, run from the project root with the venv:
 - `backup_db.py`: hot copy of the database, integrity check, upload to S3,
   keep the newest 14 copies locally.
 - `list_model.py`: list the Gemini models available to the API key.
+- `stats.py`: a read-only snapshot (members, backlog, admin queue, vouches).
+  Counts only, never anyone's details, so its output is safe to share.
 
 `inspect_db.py`, `inspect_data.py`, `wipe_test_data.py` and `test_gemini.py`
 are local-only and gitignored. `inspect_data.py` prints PII; never share its

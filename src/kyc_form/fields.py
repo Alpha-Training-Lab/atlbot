@@ -46,7 +46,7 @@ KYC_FIELDS = [
     },
     {
         "key": "birthday",
-        "label": "Birthday", "edit": "approval",
+        "label": "Birthday", "edit": "self",   # for celebrations; not verified
         "prompt": "What day and month is your birthday? e.g. 14 March\n"
                   "(We only keep the day and month — never the year.)",
         "type": "day_month",
@@ -146,7 +146,18 @@ def field_by_key(key):
 # Fields that only make sense answered or changed together.
 FIELD_GROUPS = {
     "vouch": ("Who vouched for you", ["vouch_name", "vouch_username"]),
-    "id":    ("Your ID", ["id_type", "id_document", "id_with_face"]),
+    "id":    ("Your ID document", ["id_type", "id_document"]),
+}
+# The photo holding the ID is deliberately NOT grouped with the ID: members
+# often send one without the other, and the admin checks each separately.
+
+# When one of these is submitted, what's already on file is posted under
+# the card so the admin can compare: a name against the ID, and the two
+# photos against each other (is the face photo holding THIS ID?).
+COMPARE_WITH = {
+    "full_name":    ["id_document", "id_with_face"],
+    "id_document":  ["id_with_face"],
+    "id_with_face": ["id_document"],
 }
 
 

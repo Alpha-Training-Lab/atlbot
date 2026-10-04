@@ -20,7 +20,7 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 from src import db
 from src.common.telegram_helpers import send_file, start_link, who
 from src.config import ONBOARDING_GROUP_ID
-from src.kyc_form import (FIELD_GROUPS, active_fields, display_value,
+from src.kyc_form import (COMPARE_WITH, FIELD_GROUPS, active_fields, display_value,
                           field_by_key, label, needs_approval, needs_vouch,
                           validate)
 from src.members import vouch
@@ -41,6 +41,7 @@ APPROVAL_NOTE = "\n\n(An admin checks this one before it's saved.)"
 VOUCH_NOTE = "\n\n🤝 Your vouch will be asked to confirm this."
 ID_KEYS = set(FIELD_GROUPS["id"][1])
 VOUCH_KEYS = set(FIELD_GROUPS["vouch"][1])
+_compared = {}   # card id -> files already posted under it for comparison
 NEED_PHOTO = "I need a photo for this one. Please send it as an image or a file."
 NEED_TEXT = "Please reply with text for this one."
 TAP_BUTTON = "Please tap one of the buttons above."
@@ -172,7 +173,7 @@ async def start_fill(bot, user_id):
     if pending & set(group):
       wanted -= set(group)      # part of it is still being decided
     elif wanted & set(group):
-      wanted |= set(group)      # e.g. one ID photo missing: redo the whole ID
+      wanted |= set(group)      # e.g. ID document missing: ask its type too
   keys = [f["key"] for f, _, _ in states if f["key"] in wanted]
   if not keys:
     await bot.send_message(user_id, NOTHING_MISSING)
@@ -222,7 +223,8 @@ async def _submit(bot, user_id, field, value_text=None, file_ref=None):
     db.set_profile_card(user_id, card_id)
   if file_ref:
     await send_file(bot, ONBOARDING_GROUP_ID, file_ref,
-                    caption=f"{label(field)}, user {user_id}", reply_to=card_id)
+                    caption=f"NEW {label(field)}, user {user_id}", reply_to=card_id)
+  await post_for_comparison(bot, user_id, [field["key"]], card_id)
 
   if field["key"] == "vouch_username":
     # On the card for the onboarding team to see; the vouch decides it.
@@ -232,6 +234,26 @@ async def _submit(bot, user_id, field, value_text=None, file_ref=None):
       await bot.send_message(
         user_id, f"🤝 I've asked @{key} to confirm they vouch for you. "
                  "I'll let you know when they answer.")
+
+
+async def post_for_comparison(bot, user_id, submitted_keys, card_id):
+  """Post what's on file that the admin should compare the submitted details
+  against (COMPARE_WITH): skipping anything being replaced on this same
+  card, and anything already posted under it."""
+  pending_here = {c["field_key"] for c in db.get_card_changes(card_id)
+                  if c["decision"] is None}
+  wanted = [k for key in submitted_keys for k in COMPARE_WITH.get(key, [])]
+  done = _compared.setdefault(card_id, set())
+  answers = db.get_kyc_answers(user_id)
+  for key in dict.fromkeys(wanted):   # keeps order, drops repeats
+    row = answers.get(key)
+    if key in pending_here or key in done or not (row and row["file_ref"]):
+      continue
+    await send_file(bot, ONBOARDING_GROUP_ID, row["file_ref"],
+                    caption=f"On file now, to compare: {label(field_by_key(key))}, "
+                            f"user {user_id}",
+                    reply_to=card_id)
+    done.add(key)
 
 
 async def post_card(bot, user_id, change_ids):
@@ -377,6 +399,7 @@ def _build_card(user_id, changes):
 
   buttons = []
   id_open = []
+  id_row_at = 0
   for c in changes:
     field = field_by_key(c["field_key"])
     name_ = label(field) if field else c["field_key"]
@@ -398,6 +421,8 @@ def _build_card(user_id, changes):
     else:
       status = "⏳"
       if c["field_key"] in ID_KEYS:
+        if not id_open:
+          id_row_at = len(buttons)   # the ID document's buttons go where it is listed
         id_open.append(c)
       else:
         buttons.append([
@@ -411,18 +436,18 @@ def _build_card(user_id, changes):
                   "not by admins, and don't hold up anything else."]
 
   if id_open:
-    # The ID is approved or rejected as one, and only once the member has
-    # finished sending it, so a half-sent ID is never approved.
+    # ID type and document are approved or rejected as one, once both have
+    # arrived. The photo holding the ID has its own buttons.
     session = db.get_profile_session(user_id)
     still_sending = session is not None and session["card_message_id"] == (
       changes[0]["card_message_id"])
     if still_sending:
-      lines += ["", "⏳ The member is still sending their ID details."]
+      lines += ["", "⏳ The member is still sending their ID document details."]
     else:
       first = id_open[0]["id"]
-      buttons.append([
-        InlineKeyboardButton("✅ ID", callback_data=f"pc:ga:{first}"),
-        InlineKeyboardButton("❌ ID", callback_data=f"pc:gr:{first}"),
+      buttons.insert(id_row_at, [
+        InlineKeyboardButton("✅ ID document", callback_data=f"pc:ga:{first}"),
+        InlineKeyboardButton("❌ ID document", callback_data=f"pc:gr:{first}"),
       ])
 
   return "\n".join(lines), InlineKeyboardMarkup(buttons) if buttons else None
@@ -470,7 +495,8 @@ async def _maybe_notify_member(bot, user_id, card_message_id):
 
 
 async def handle_change_decision(update, context: ContextTypes.DEFAULT_TYPE):
-  """pc:a|r:<change_id> for one item; pc:ga|gr:<change_id> for the whole ID."""
+  """pc:a|r:<change_id> for one item; pc:ga|gr:<change_id> for the ID document
+  (type and photo together)."""
   query = update.callback_query
   if query.message is None or query.message.chat.id != ONBOARDING_GROUP_ID:
     await query.answer()

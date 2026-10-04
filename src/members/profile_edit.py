@@ -22,7 +22,7 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 from src import db
 from src.common.telegram_helpers import send_file, who
 from src.config import ONBOARDING_GROUP_ID
-from src.kyc_form import (FIELD_GROUPS, active_fields, display_value,
+from src.kyc_form import (COMPARE_WITH, FIELD_GROUPS, active_fields, display_value,
                           field_by_key, label, needs_approval, needs_vouch,
                           validate)
 from src.members import profile, vouch
@@ -32,17 +32,13 @@ logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 
-GROUPS = FIELD_GROUPS   # vouch and ID are each changed as one (kyc_form/fields.py)
-# A change to these is checked against the ID already on file, so that ID
-# is posted under the card for the admin to compare.
-CHECK_AGAINST_ID = {"full_name", "birthday"}
+GROUPS = FIELD_GROUPS   # changed together (kyc_form/fields.py)
 
 REJECT_REASONS = [
   "Photo is blurry or unreadable",
   "Name doesn't match the ID",
-  "Birthday doesn't match the ID",
+  "The photo holding the ID shows a different ID",
   "The person in the photo doesn't match the ID",
-  "Vouch could not be verified",
 ]
 
 # ----- Messages -------------------------------------------------------------
@@ -308,13 +304,10 @@ async def _save(bot, user_id):
       await send_file(bot, ONBOARDING_GROUP_ID, draft[f["key"]]["file_ref"],
                       caption=f"NEW {label(f)}, user {user_id}",
                       reply_to=card.message_id)
-  if any(f["key"] in CHECK_AGAINST_ID for f in fields):   # the ID to compare against
-    for key in ("id_document", "id_with_face"):
-      row = answers.get(key)
-      if row and row["file_ref"]:
-        await send_file(bot, ONBOARDING_GROUP_ID, row["file_ref"],
-                        caption=f"Current {label(field_by_key(key))} on file, user {user_id}",
-                        reply_to=card.message_id)
+  # What's on file to compare against (a name against the ID; each ID photo
+  # against the other), skipping anything this edit replaces.
+  await profile.post_for_comparison(bot, user_id, [f["key"] for f in fields],
+                                    card.message_id)
 
   await bot.send_message(user_id, SENT_FOR_APPROVAL)
 
@@ -380,11 +373,18 @@ def _card_text(user_id, fields, draft, answers):
     d = draft[f["key"]]
     new = "📎 posted below" if d["file_ref"] else display_value(f, d["value_text"])
     lines.append(f"{label(f)}\n  Current: {_current(f, answers)}\n  New: {new}")
-  if any(f["key"] in CHECK_AGAINST_ID for f in fields):
-    on_file = any(answers.get(k) and answers[k]["file_ref"]
-                  for k in ("id_document", "id_with_face"))
-    lines += ["", "📎 Their current ID is posted below to compare." if on_file
-              else "⚠️ No ID on file to compare against."]
+  changing = {f["key"] for f in fields}
+  compare = [k for f in fields for k in COMPARE_WITH.get(f["key"], [])
+             if k not in changing]
+  compare = list(dict.fromkeys(compare))
+  if compare:
+    have = [label(field_by_key(k)) for k in compare
+            if answers.get(k) and answers[k]["file_ref"]]
+    missing = [label(field_by_key(k)) for k in compare if label(field_by_key(k)) not in have]
+    if have:
+      lines += ["", f"📎 On file, posted below to compare: {', '.join(have)}"]
+    if missing:
+      lines += ["", f"⚠️ Nothing on file to compare against: {', '.join(missing)}"]
   return "\n".join(lines)
 
 
