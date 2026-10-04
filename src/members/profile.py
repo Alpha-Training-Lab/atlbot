@@ -18,7 +18,7 @@ from telegram.error import BadRequest, Forbidden
 from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
 from src import db
-from src.common.telegram_helpers import send_file, start_link, who
+from src.common.telegram_helpers import handle_or_name, send_file, start_link, who
 from src.config import ONBOARDING_GROUP_ID, PROFILE_SESSION_IDLE_SECONDS
 from src.kyc_form import (COMPARE_WITH, FIELD_GROUPS, active_fields, display_value,
                           field_by_key, label, needs_approval, needs_vouch,
@@ -250,7 +250,8 @@ async def _submit(bot, user_id, field, value_text=None, file_ref=None):
     db.set_profile_card(user_id, card_id)
   if file_ref:
     await send_file(bot, ONBOARDING_GROUP_ID, file_ref,
-                    caption=f"NEW {label(field)}, user {user_id}", reply_to=card_id)
+                    caption=f"NEW {label(field)}, {handle_or_name(db.get_member(user_id))}",
+                    reply_to=card_id)
   await post_for_comparison(bot, user_id, [field["key"]], card_id)
 
   if field["key"] == "vouch_username":
@@ -278,7 +279,7 @@ async def post_for_comparison(bot, user_id, submitted_keys, card_id):
       continue
     await send_file(bot, ONBOARDING_GROUP_ID, row["file_ref"],
                     caption=f"On file now, to compare: {label(field_by_key(key))}, "
-                            f"user {user_id}",
+                            f"{handle_or_name(db.get_member(user_id))}",
                     reply_to=card_id)
     done.add(key)
 
@@ -422,7 +423,7 @@ def _build_card(user_id, changes):
   member = db.get_member(user_id)
   answers = db.get_kyc_answers(user_id)
   lines = ["PROFILE DETAILS: awaiting approval", "",
-           f"Telegram: {who(member)}", f"User ID: {user_id}", ""]
+           f"Telegram: {who(member)}", ""]
 
   buttons = []
   id_open = []

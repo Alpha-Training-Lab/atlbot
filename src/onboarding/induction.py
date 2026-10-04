@@ -201,7 +201,6 @@ async def send_summary_card(bot, app_id, observed_seconds):
   text = (
     "INDUCTION REQUEST — awaiting review\n\n"
     f"Telegram: {who(member)}\n"
-    f"User ID: {app['user_id']}\n"
     f"{timing}\n\n"
     f"Read their post: "
     f"{message_link(app['source_chat_id'], app['source_message_id'])}"

@@ -15,6 +15,7 @@ from src.db.onboarding import (
   advance_kyc, bump_kyc_attempts, create_application, decide_application,
   get_application, get_kyc_answers, pop_registration_prompt, save_kyc_answer,
   save_registration_prompt,
+  pop_reason_prompt, save_reason_prompt,
 )
 from src.db.deletions import clear_deletion, due_deletions, schedule_deletion
 from src.db.legacy import (
@@ -65,7 +66,7 @@ __all__ = [
   "cancel_vouch_requests", "create_vouch_request", "decide_vouch_request",
   "get_vouch_request", "latest_vouch_request", "mark_vouch_nudged",
   "open_requests_for_vouch", "open_vouch_requests_with_age",
-  "set_vouch_contact", "username_on_record", "refresh_telegram_details",
+  "pop_reason_prompt", "save_reason_prompt", "set_vouch_contact", "username_on_record", "refresh_telegram_details",
   "end_edit_session_if_idle", "end_profile_session_if_idle",
   "idle_edit_sessions", "idle_profile_sessions",
 ]

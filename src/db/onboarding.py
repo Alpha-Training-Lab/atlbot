@@ -125,3 +125,24 @@ def pop_registration_prompt(user_id):
       (row["chat_id"], row["message_id"]),
     )
   return row
+
+
+def save_reason_prompt(message_id, user_id, card_message_id):
+  with get_conn() as conn:
+    conn.execute(
+      "INSERT OR REPLACE INTO reason_prompts (message_id, user_id, card_message_id) "
+      "VALUES (?, ?, ?)",
+      (message_id, user_id, card_message_id),
+    )
+
+
+def pop_reason_prompt(message_id):
+  """Who an "Other" decline prompt was about, forgetting it once used."""
+  with get_conn() as conn:
+    row = conn.execute(
+      "SELECT user_id, card_message_id FROM reason_prompts WHERE message_id = ?",
+      (message_id,),
+    ).fetchone()
+    if row is not None:
+      conn.execute("DELETE FROM reason_prompts WHERE message_id = ?", (message_id,))
+  return row

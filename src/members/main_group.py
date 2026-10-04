@@ -18,6 +18,7 @@ from telegram.error import Forbidden, TelegramError
 from telegram.ext import ContextTypes
 
 from src import db
+from src.common.telegram_helpers import handle_or_name
 from src.config import (INVITE_TTL_SECONDS, MAIN_GROUP_ID, ONBOARDING_ENTRY_URL,
                         OWNER_USER_ID)
 
@@ -81,7 +82,7 @@ async def in_main_group(bot, user_id):
 async def _personal_invite(bot, user_id):
   link = await bot.create_chat_invite_link(
     chat_id=MAIN_GROUP_ID,
-    name=f"member-{user_id}"[:32],
+    name=f"for {handle_or_name(db.get_member(user_id))}"[:32],   # no ids in admin view
     member_limit=1,
     expire_date=datetime.now(timezone.utc)
                 + timedelta(seconds=INVITE_TTL_SECONDS),

@@ -358,6 +358,16 @@ FAQ). Errors are answered with a polite fallback, never a stack trace.
 `classify_induction_intent` is a separate, much cheaper call that returns one
 word, defaulting to "onboarding" on any error.
 
+### What admins see
+
+Cards, photo captions, prompts and invite-link names identify a member by
+their @username, or their name if they have none (`handle_or_name` in
+`src/common/telegram_helpers.py`). Telegram user ids never appear in
+admin-facing text; the bot links cards, photos and prompts to members
+internally (for example, an "Other" decline prompt is matched through the
+`reason_prompts` table, not its wording). The one exception is the owner's
+private alert about an unauthorised join.
+
 ### Repeating jobs
 
 `members/vouch.sweep` runs every 30 minutes: reminders and expiry for
@@ -533,6 +543,7 @@ never half-applies.
 | `main_group_invites` | Each member's current one-time invite link, so it's re-sent rather than re-made. |
 | `group_prompts` | When someone was last nudged in the main group to update their details. |
 | `vouch_requests` | Each request for a vouch to confirm a member, who the vouch turned out to be, and the outcome (yes, no, expired, not a member, cancelled). |
+| `reason_prompts` | Which member an admin's "Other" decline prompt is about, so the prompt text needn't show their id. |
 
 The database holds real member PII (names, phone numbers, addresses, ID
 photos by reference) and is gitignored. It must never be committed.

@@ -199,4 +199,13 @@ CREATE TABLE IF NOT EXISTS vouch_requests (
 
 CREATE INDEX IF NOT EXISTS idx_vouch_open
   ON vouch_requests(vouch_key, status);
+
+-- An admin's "Other" decline prompt, so their typed reply can be matched to
+-- the member without the member's id appearing in the prompt text.
+CREATE TABLE IF NOT EXISTS reason_prompts (
+    message_id      INTEGER PRIMARY KEY,
+    user_id         INTEGER NOT NULL,
+    card_message_id INTEGER NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """

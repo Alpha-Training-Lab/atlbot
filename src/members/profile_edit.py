@@ -20,7 +20,7 @@ from telegram.error import Forbidden
 from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
 from src import db
-from src.common.telegram_helpers import send_file, who
+from src.common.telegram_helpers import handle_or_name, send_file, who
 from src.config import ONBOARDING_GROUP_ID, PROFILE_SESSION_IDLE_SECONDS
 from src.kyc_form import (COMPARE_WITH, FIELD_GROUPS, active_fields, display_value,
                           field_by_key, label, needs_approval, needs_vouch,
@@ -306,7 +306,7 @@ async def _save(bot, user_id):
   for f in fields:   # the new photos, under the card
     if draft[f["key"]]["file_ref"]:
       await send_file(bot, ONBOARDING_GROUP_ID, draft[f["key"]]["file_ref"],
-                      caption=f"NEW {label(f)}, user {user_id}",
+                      caption=f"NEW {label(f)}, {handle_or_name(db.get_member(user_id))}",
                       reply_to=card.message_id)
   # What's on file to compare against (a name against the ID; each ID photo
   # against the other), skipping anything this edit replaces.
@@ -387,7 +387,7 @@ async def sweep_idle_sessions(context: ContextTypes.DEFAULT_TYPE):
 def _card_text(user_id, fields, draft, answers):
   member = db.get_member(user_id)
   lines = ["PROFILE CHANGE: awaiting approval", "",
-           f"Telegram: {who(member)}", f"User ID: {user_id}", ""]
+           f"Telegram: {who(member)}", ""]
   for f in fields:
     d = draft[f["key"]]
     new = "📎 posted below" if d["file_ref"] else display_value(f, d["value_text"])

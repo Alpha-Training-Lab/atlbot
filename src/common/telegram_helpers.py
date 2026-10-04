@@ -19,6 +19,18 @@ def message_link(chat_id, message_id):
   return f"https://t.me/c/{str(chat_id).replace('-100', '', 1)}/{message_id}"
 
 
+def handle_or_name(member):
+  """How a member is labelled where admins see them (photo captions, invite
+  link names): their @username, or their name if they have none. Their
+  Telegram id stays internal; admins never see it."""
+  if member is None:
+    return "a member"
+  if member["username"]:
+    return f"@{member['username']}"
+  name = f"{member['first_name'] or ''} {member['last_name'] or ''}".strip()
+  return name or "a member without a username"
+
+
 def who(member):
   """'First Last @username' for an admin card."""
   handle = f"@{member['username']}" if member["username"] else "(no username)"

@@ -12,7 +12,7 @@ from telegram.error import BadRequest, TelegramError
 from telegram.ext import ContextTypes
 
 from src import db
-from src.common.telegram_helpers import send_file, who
+from src.common.telegram_helpers import handle_or_name, send_file, who
 from src.config import (COOLDOWN_SECONDS, MAX_DECLINES, ONBOARDING_GROUP_ID,
                         VOUCH_EXPIRE_SECONDS)
 from src.kyc_form import active_fields, display_value, label
@@ -29,8 +29,10 @@ DECLINE_REASONS = [
   "Answers incomplete or unclear",
 ]
 
-_REASON_PROMPT = "DECLINE REASON for user {uid} (card {mid})"
-_REASON_RE = re.compile(r"DECLINE REASON for user (\d+) \(card (\d+)\)")
+_REASON_PROMPT = "DECLINE REASON for {who}"
+# Prompts posted before ids came off admin-visible text still carry the id;
+# this only exists so a reply to one of those still works.
+_OLD_REASON_RE = re.compile(r"DECLINE REASON for user (\d+) \(card (\d+)\)")
 _NOT_TOLD = ("⚠️ I couldn't message this member (they may have blocked me). "
              "Please contact them directly.")
 # ===========================================================================
@@ -62,7 +64,6 @@ def build_kyc_card(user_id, card_message_id=None):
     "NEW REGISTRATION — awaiting access approval",
     "",
     f"Telegram: {who(member)}",
-    f"User ID: {user_id}",
   ]
 
   declines = db.count_events(user_id, "status:declined")
@@ -166,9 +167,10 @@ async def post_documents(bot, user_id, card_message_id):
   """Post the member's ID documents into the onboarding group, as replies
   to their card. Returns how many were posted."""
   rows = _document_rows(user_id)
+  member_label = handle_or_name(db.get_member(user_id))
   for field, row in rows:
     await send_file(bot, ONBOARDING_GROUP_ID, row["file_ref"],
-                    caption=f"{label(field)}, user {user_id}",
+                    caption=f"{label(field)}, {member_label}",
                     reply_to=card_message_id)
   return len(rows)
 
@@ -329,13 +331,14 @@ async def handle_access_decision(update, context: ContextTypes.DEFAULT_TYPE):
     return
 
   if action == "oth":
-    await context.bot.send_message(
+    prompt = await context.bot.send_message(
       chat_id=ONBOARDING_GROUP_ID,
-      text=(_REASON_PROMPT.format(uid=target_id,
-                                  mid=query.message.message_id)
+      text=(_REASON_PROMPT.format(who=handle_or_name(member))
             + "\n\nReply to this message with the reason."),
       reply_markup=ForceReply(selective=False),
     )
+    # Who this prompt is about lives in the database, not in its text.
+    db.save_reason_prompt(prompt.message_id, target_id, query.message.message_id)
     return
 
   logger.warning("Unknown admin action: %r", query.data)
@@ -350,12 +353,14 @@ async def handle_decline_reason(update, context: ContextTypes.DEFAULT_TYPE):
   if replied.from_user.id != context.bot.id:
     return
 
-  match = _REASON_RE.search(replied.text or "")
-  if not match:
-    return
-
-  target_id = int(match.group(1))
-  card_id = int(match.group(2))
+  prompt = db.pop_reason_prompt(replied.message_id)
+  if prompt is not None:
+    target_id, card_id = prompt["user_id"], prompt["card_message_id"]
+  else:
+    match = _OLD_REASON_RE.search(replied.text or "")
+    if not match:
+      return
+    target_id, card_id = int(match.group(1)), int(match.group(2))
   admin = message.from_user
   reason = (message.text or "").strip()
   if not reason:
