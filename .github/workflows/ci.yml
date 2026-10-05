@@ -1,9 +1,12 @@
-name: CI
+name: CI/CD
 
 on:
   push:
     branches: [main]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -17,3 +20,30 @@ jobs:
       - run: ruff check . --select E4,E7,E9,F
       - run: python -m compileall -q .
       - run: python -m pytest tests
+
+  deploy:
+    needs: test                        # only runs if every test passed
+    if: github.event_name == 'push'    # PRs get tested, never deployed
+    runs-on: ubuntu-latest
+    concurrency:
+      group: production
+      cancel-in-progress: false        # never kill a deploy halfway
+    steps:
+      - name: Deploy to EC2
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -T -i ~/.ssh/deploy_key \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            ubuntu@"$EC2_HOST"
+
+      - name: Remove key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
