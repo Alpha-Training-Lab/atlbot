@@ -61,8 +61,9 @@ async def digest_finished_days(context=None):
                          chat_id, day)
           continue
 
-      db.save_brief_day(chat_id, day, len(messages), dict(replies), digest,
-                        up_to_id=max(m["id"] for m in messages))
+      senders = {m["user_id"] for m in messages}
+      db.save_brief_day(chat_id, day, len(messages), dict(replies), senders,
+                        digest, up_to_id=max(m["id"] for m in messages))
       logger.info("Brief: digested chat %s on %s (%d messages%s)", chat_id, day,
                   len(messages), "" if digest else ", no digest")
 

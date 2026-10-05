@@ -31,6 +31,8 @@ _ADDED_COLUMNS = [
   # session's start, so nobody mid-answer is closed straight away.
   ("profile_sessions", "last_active_at", "TEXT", "datetime('now')"),
   ("edit_sessions", "last_active_at", "TEXT", "datetime('now')"),
+  # Only matters for a database made by an early test of the weekly brief.
+  ("brief_days", "senders_json", "TEXT", "'[]'"),
 ]
 
 

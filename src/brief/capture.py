@@ -10,16 +10,20 @@ Which groups are read:
   - any group Alpha is added to later, if the person who added it is the
     owner or an admin;
   - never the groups in config.BRIEF_NEVER_READ.
+
+The felicitation group is read for birthdays only (capture_birthday): no
+text is stored, just who was wished a happy birthday.
 """
 import logging
+import re
 from datetime import timezone
 
-from telegram import Update
+from telegram import MessageEntity, Update
 from telegram.constants import ChatMemberStatus, ChatType
 from telegram.ext import ContextTypes
 
 from src import db
-from src.config import BRIEF_NEVER_READ, MAIN_GROUP_ID
+from src.config import BRIEF_NEVER_READ, FELICITATION_GROUP_ID, MAIN_GROUP_ID
 from src.members import roles
 # ===========================================================================
 logger = logging.getLogger(__name__)
@@ -73,6 +77,47 @@ async def capture_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      message.chat_id)
 
 
+# A birthday wish: "happy birthday", "happy b'day", "HBD", "many happy returns".
+_BIRTHDAY_WISH = re.compile(
+  r"happy\s*(birth\s*day|b'?day|bday)|\bhbd\b|many happy returns", re.IGNORECASE)
+_MENTIONS = [MessageEntity.MENTION, MessageEntity.TEXT_MENTION]
+
+
+def _celebrants(message, bot_username):
+  """Who a birthday post is for: everyone it @mentions, except Alpha."""
+  if message.text:
+    found = message.parse_entities(_MENTIONS)
+  else:
+    found = message.parse_caption_entities(_MENTIONS)
+  people = set()
+  for entity, text in found.items():
+    if entity.type == MessageEntity.TEXT_MENTION:      # a name linked to a user
+      if entity.user and not entity.user.is_bot:
+        people.add(f"id:{entity.user.id}")
+    else:                                              # an @username
+      username = text.lstrip("@").lower()
+      if username and username != (bot_username or "").lower():
+        people.add(f"u:{username}")
+  return people
+
+
+async def capture_birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  """A post in the felicitation group (text, or a picture's caption)."""
+  message = update.message
+  if message is None:
+    return
+  words = message.text or message.caption or ""
+  if not _BIRTHDAY_WISH.search(words):
+    return
+  try:
+    people = _celebrants(message, context.bot.username)
+    if people:
+      day = message.date.astimezone(timezone.utc).strftime("%Y-%m-%d")
+      db.save_birthdays(day, people)
+  except Exception:
+    logger.exception("Brief: could not record a birthday")
+
+
 async def track_alpha_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
   """Alpha was added to, or left, a group."""
   change = update.my_chat_member
@@ -84,7 +129,9 @@ async def track_alpha_groups(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
   if now_in and not was_in:
     adder = change.from_user.id if change.from_user else None
-    if chat_id in BRIEF_NEVER_READ:
+    if chat_id == FELICITATION_GROUP_ID:
+      enabled, why = False, "birthdays only"
+    elif chat_id in BRIEF_NEVER_READ:
       enabled, why = False, "OFF (never read)"
     elif adder is not None and roles.is_admin(adder):
       enabled, why = True, "ON"

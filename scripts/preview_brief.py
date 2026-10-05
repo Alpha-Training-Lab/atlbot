@@ -10,9 +10,9 @@ Run from the project root:
   .venv/bin/python scripts/preview_brief.py --db /path/to/live/atl_bot.db
   .venv/bin/python scripts/preview_brief.py --db /path/to/live/atl_bot.db --sample
 
---sample  adds made-up main-group chat and three made-up members who said
-          Yes to being mentioned, so the Gemini sections, birthdays and
-          "most helpful" have something to show. Real data is untouched.
+--sample  adds made-up main-group chat, birthday wishes and three made-up
+          members who said Yes to being mentioned, so every section has
+          something to show. Real data is untouched.
 --week    the Monday that starts the week to report (default: last full week).
 --no-send print only.
 """
@@ -32,18 +32,24 @@ from telegram import Bot, LinkPreviewOptions  # noqa: E402
 import src.db.connection as connection  # noqa: E402
 from src import db  # noqa: E402
 from src.brief.digest import digest_finished_days  # noqa: E402
-from src.brief.weekly import build_brief  # noqa: E402
+from src.brief.weekly import compose, gather  # noqa: E402
 from src.config import BOT_TOKEN, MAIN_GROUP_ID, OWNER_USER_ID  # noqa: E402
 from src.kyc_form.fields import BRIEF_MENTIONS_KEY, BRIEF_MENTIONS_YES  # noqa: E402
 # ===========================================================================
 
 # Made-up members for --sample. Ids far above any real Telegram id in use here.
 SAMPLE_MEMBERS = [
-  (990000001, "Ada (sample)", 2),     # birthday: 2 days into the coming week
-  (990000002, "Tunde (sample)", None),
-  (990000003, "Chioma (sample)", None),
+  (990000001, "Ada (sample)"),
+  (990000002, "Tunde (sample)"),
+  (990000003, "Chioma (sample)"),
 ]
 ADA, TUNDE, CHIOMA = (m[0] for m in SAMPLE_MEMBERS)
+
+# Birthday wishes "seen" in the felicitation group: (day 0-6, celebrant).
+# The last one isn't on record, so it's counted but never named.
+SAMPLE_BIRTHDAYS = [
+  (1, f"id:{ADA}"), (1, f"id:{ADA}"), (4, f"id:{TUNDE}"), (5, "u:sample_not_on_record"),
+]
 
 # (day of the reported week 0-6, hour, sender, replying to, text)
 SAMPLE_CHAT = [
@@ -83,20 +89,17 @@ def copy_database(live_path, copy_path):
 
 def add_sample_data(week_start, main_group_id):
   monday = date.fromisoformat(week_start)
-  coming = monday + timedelta(days=7)
   with db.get_conn() as conn:
-    for user_id, name, birthday_offset in SAMPLE_MEMBERS:
+    for user_id, name in SAMPLE_MEMBERS:
       conn.execute(
         "INSERT OR REPLACE INTO members (user_id, first_name, status) "
         "VALUES (?, ?, 'active')", (user_id, name))
       conn.execute(
         "INSERT OR REPLACE INTO kyc_responses (user_id, field_key, value_text) "
         "VALUES (?, ?, ?)", (user_id, BRIEF_MENTIONS_KEY, BRIEF_MENTIONS_YES))
-      if birthday_offset is not None:
-        birthday = coming + timedelta(days=birthday_offset)
-        conn.execute(
-          "INSERT OR REPLACE INTO kyc_responses (user_id, field_key, value_text) "
-          "VALUES (?, 'birthday', ?)", (user_id, birthday.strftime("%m-%d")))
+  for day, celebrant in SAMPLE_BIRTHDAYS:
+    db.save_birthdays(str(monday + timedelta(days=day)), [celebrant])
+  with db.get_conn() as conn:
     for i, (day, hour, sender, reply_to, text) in enumerate(SAMPLE_CHAT, 1):
       sent_at = f"{monday + timedelta(days=day)} {hour:02d}:{i:02d}:00"
       conn.execute(
@@ -116,12 +119,16 @@ async def run(args):
     await digest_finished_days()
 
   async with Bot(BOT_TOKEN) as bot:
-    text, used_llm = await build_brief(bot, args.week)
+    stats = await gather(args.week)
+    text, used_gemini = compose(stats)
     label = ("🧪 PREVIEW, not posted anywhere\n"
-             f"Week of {args.week} · {'sample chat added' if args.sample else 'real data only'}"
-             f" · Gemini sections: {'included' if used_llm else 'NOT included'}\n"
+             f"Week of {args.week} · {'sample data added' if args.sample else 'real data only'}"
+             f" · Gemini's part: {'included' if used_gemini else 'NOT included'}\n"
              "────────────\n\n")
     print("\n" + label + text + f"\n\n({len(text)} characters)")
+    if stats["hidden_numbers"]:
+      print("Hidden from WEEK IN NUMBERS (below BRIEF_HIDE_BELOW): "
+            + "; ".join(stats["hidden_numbers"]))
     if args.no_send:
       return
     if not OWNER_USER_ID:

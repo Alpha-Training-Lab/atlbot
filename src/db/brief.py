@@ -95,36 +95,40 @@ def brief_day_exists(chat_id, day):
     ).fetchone() is not None
 
 
-def save_brief_day(chat_id, day, message_count, replies, digest, up_to_id):
+def save_brief_day(chat_id, day, message_count, replies, senders, digest, up_to_id):
   """Store a day's counts and digest AND delete its raw messages, in one
   transaction: both happen or neither does.
 
+  replies: {user_id: replies their messages got}. senders: who posted.
   A row that already exists (a late message for a day already digested) has
   the new counts added to it and keeps its digest. Only raw messages up to
   up_to_id are deleted: anything that arrived after they were read waits
   for the next run."""
   with get_conn() as conn:
     row = conn.execute(
-      "SELECT message_count, replies_json FROM brief_days "
+      "SELECT message_count, replies_json, senders_json FROM brief_days "
       "WHERE day = ? AND chat_id = ?",
       (day, chat_id),
     ).fetchone()
     if row is None:
       conn.execute(
         "INSERT INTO brief_days "
-        "(day, chat_id, message_count, replies_json, digest_json) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "(day, chat_id, message_count, replies_json, senders_json, digest_json) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         (day, chat_id, message_count, json.dumps(replies),
+         json.dumps(sorted(senders)),
          json.dumps(digest) if digest is not None else None),
       )
     else:
       merged = {int(k): v for k, v in json.loads(row["replies_json"]).items()}
       for user_id, n in replies.items():
         merged[user_id] = merged.get(user_id, 0) + n
+      everyone = set(json.loads(row["senders_json"])) | set(senders)
       conn.execute(
-        "UPDATE brief_days SET message_count = ?, replies_json = ? "
-        "WHERE day = ? AND chat_id = ?",
-        (row["message_count"] + message_count, json.dumps(merged), day, chat_id),
+        "UPDATE brief_days SET message_count = ?, replies_json = ?, "
+        "senders_json = ? WHERE day = ? AND chat_id = ?",
+        (row["message_count"] + message_count, json.dumps(merged),
+         json.dumps(sorted(everyone)), day, chat_id),
       )
     conn.execute(
       f"DELETE FROM brief_messages WHERE chat_id = ? AND {_IN_DAY} AND id <= ?",
@@ -150,6 +154,29 @@ def purge_brief_data(keep_days):
       "DELETE FROM brief_messages WHERE sent_at < datetime('now', ?)", (cutoff,))
     conn.execute(
       "DELETE FROM brief_days WHERE day < date('now', ?)", (cutoff,))
+    conn.execute(
+      "DELETE FROM brief_birthdays WHERE day < date('now', ?)", (cutoff,))
+
+
+# ----- Birthdays (felicitation group) ---------------------------------
+def save_birthdays(day, celebrants):
+  """IGNORE: the same person wished twice on one day is one birthday."""
+  with get_conn() as conn:
+    conn.executemany(
+      "INSERT OR IGNORE INTO brief_birthdays (day, celebrant) VALUES (?, ?)",
+      [(day, c) for c in celebrants],
+    )
+
+
+def week_celebrants(week_start):
+  """Everyone wished a happy birthday during the week, once each."""
+  with get_conn() as conn:
+    rows = conn.execute(
+      "SELECT DISTINCT celebrant FROM brief_birthdays "
+      "WHERE day >= ? AND day < date(?, '+7 days')",
+      (week_start, week_start),
+    ).fetchall()
+  return [r["celebrant"] for r in rows]
 
 
 # ----- Weekly brief ---------------------------------------------------
@@ -182,33 +209,43 @@ def finish_brief_week(week_start, message_id, used_llm):
     )
     conn.execute(
       "DELETE FROM brief_days WHERE day < date(?, '+7 days')", (week_start,))
+    conn.execute(
+      "DELETE FROM brief_birthdays WHERE day < date(?, '+7 days')", (week_start,))
 
 
 # ----- Numbers for the brief ------------------------------------------
-def brief_event_counts(week_start):
-  """{event: count} for the week, plus 'profiles_updated': members (not
-  edits) who saved or changed profile details."""
-  with get_conn() as conn:
-    counts = dict(conn.execute(
-      "SELECT event, COUNT(*) FROM member_events "
-      "WHERE created_at >= datetime(?) AND created_at < datetime(?, '+7 days') "
-      "GROUP BY event",
-      (week_start, week_start),
-    ).fetchall())
-    counts["profiles_updated"] = conn.execute(
-      "SELECT COUNT(DISTINCT user_id) FROM member_events "
-      "WHERE created_at >= datetime(?) AND created_at < datetime(?, '+7 days') "
-      "AND event IN ('profile_updated', 'profile_edited')",
-      (week_start, week_start),
-    ).fetchone()[0]
-  return counts
+# A member is "new" when an admin approved their registration or the owner
+# added them. Existing members being recognised (legacy links, main-group
+# members with no old record) are also logged as status:active, so their
+# notes are excluded here.
+_NEW_MEMBER = ("event = 'status:active' AND (note IS NULL "
+               "OR note = 'added to the main group by the owner')")
 
 
-def count_active_members():
+def brief_growth_counts(week_start):
+  """{'new_members': n, 'new_in_induction': n} for the week."""
+  window = ("created_at >= datetime(?) AND created_at < datetime(?, '+7 days')")
   with get_conn() as conn:
-    return conn.execute(
-      "SELECT COUNT(*) FROM members WHERE status = ?", (STATUS_ACTIVE,)
-    ).fetchone()[0]
+    def count(where):
+      return conn.execute(
+        f"SELECT COUNT(DISTINCT user_id) FROM member_events "
+        f"WHERE {window} AND {where}",
+        (week_start, week_start),
+      ).fetchone()[0]
+    return {
+      "new_members": count(_NEW_MEMBER),
+      "new_in_induction": count("event = 'joined_induction'"),
+    }
+
+
+# ----- Who may be named -----------------------------------------------
+_OPTED_IN = """
+  SELECT m.user_id, m.username, m.first_name
+  FROM members m
+  JOIN kyc_responses ok ON ok.user_id = m.user_id
+   AND ok.field_key = ? AND ok.value_text = ?
+  WHERE m.status = ?
+"""
 
 
 def mentionable_members(user_ids):
@@ -219,33 +256,22 @@ def mentionable_members(user_ids):
   marks = ", ".join("?" for _ in user_ids)
   with get_conn() as conn:
     rows = conn.execute(
-      f"""
-      SELECT m.user_id, m.username, m.first_name
-      FROM members m
-      JOIN kyc_responses ok ON ok.user_id = m.user_id
-       AND ok.field_key = ? AND ok.value_text = ?
-      WHERE m.status = ? AND m.user_id IN ({marks})
-      """,
+      _OPTED_IN + f" AND m.user_id IN ({marks})",
       (BRIEF_MENTIONS_KEY, BRIEF_MENTIONS_YES, STATUS_ACTIVE, *user_ids),
     ).fetchall()
   return {r["user_id"]: r for r in rows}
 
 
-def mentionable_birthdays(mm_dd_list):
-  """Active, opted-in members whose birthday (stored as MM-DD) is in the list."""
-  if not mm_dd_list:
-    return []
-  marks = ", ".join("?" for _ in mm_dd_list)
+def user_ids_for_usernames(usernames):
+  """{lowercase username: user_id} for anyone on record, opted in or not.
+  Used to count a person once, whether wished by @username or by name."""
+  if not usernames:
+    return {}
+  marks = ", ".join("?" for _ in usernames)
   with get_conn() as conn:
-    return conn.execute(
-      f"""
-      SELECT m.user_id, m.username, m.first_name, b.value_text AS birthday
-      FROM members m
-      JOIN kyc_responses ok ON ok.user_id = m.user_id
-       AND ok.field_key = ? AND ok.value_text = ?
-      JOIN kyc_responses b ON b.user_id = m.user_id
-       AND b.field_key = 'birthday'
-      WHERE m.status = ? AND b.value_text IN ({marks})
-      """,
-      (BRIEF_MENTIONS_KEY, BRIEF_MENTIONS_YES, STATUS_ACTIVE, *mm_dd_list),
+    rows = conn.execute(
+      f"SELECT user_id, lower(username) AS username FROM members "
+      f"WHERE lower(username) IN ({marks})",
+      tuple(usernames),
     ).fetchall()
+  return {r["username"]: r["user_id"] for r in rows}

@@ -444,19 +444,28 @@ a copy.
    `BRIEF_DIGEST_GIVE_UP_DAYS` it is saved without a digest and the messages
    are deleted anyway.
 3. **Brief** (`weekly.py`, every 10 minutes, acts only on Monday between
-   `BRIEF_HOUR_UTC` and `BRIEF_LAST_HOUR_UTC`): numbers from SQLite, plus
-   Gemini's merged highlights, lessons and celebrations. Gemini's part is used
-   only if it passes a pattern check in code and then a Gemini compliance
-   check; otherwise the brief is numbers only. `brief_weeks` makes sure it is
-   sent once, and the week's digests are deleted once it is.
+   `BRIEF_HOUR_UTC` and `BRIEF_LAST_HOUR_UTC`). From SQLite: week in numbers
+   (this week's activity only, never totals; a count below `BRIEF_HIDE_BELOW`
+   is left out), birthdays, milestones, most helpful. From Gemini: a summary
+   of the week's discussions, the lesson of the week and members' wins, used
+   only if they pass a pattern check in code and then a Gemini compliance
+   check. Without them, the lesson comes from a fixed list. The safety tip
+   rotates through a fixed list. Both lists are in `content.py`, shuffled
+   once and taken one per week, so nothing repeats until all are used.
+   `brief_weeks` makes sure the brief is sent once, and the week's data is
+   deleted once it is.
 
 **Which groups:** the main group from the start; any group Alpha is added to
 later if the owner or an admin added it. Never the leadership, onboarding or
-induction group (`config.BRIEF_NEVER_READ`).
+induction group (`config.BRIEF_NEVER_READ`). The felicitation group
+(`FELICITATION_GROUP_ID`) is read for birthdays only: a post saying happy
+birthday, HBD or many happy returns records who it @mentions, and no text is
+stored.
 
 **Who is named:** only active members who answered "Yes, mention me" to the
 "Weekly brief" question (last KYC question; existing members can set it with
-/profile). No answer counts as No. Gemini's sections never name anyone.
+/profile). No answer counts as No. Everyone celebrated is counted; only they
+are named. Gemini's part never names anyone.
 
 **Retention:** raw messages until their day is digested (normally just after
 midnight UTC), digests until the brief is sent, nothing past
@@ -520,7 +529,8 @@ atlbot/
 │   ├── brief/                  # The weekly community brief
 │   │   ├── capture.py          # Store group messages; track groups Alpha joins
 │   │   ├── digest.py           # Daily counts + Gemini digest, then delete messages
-│   │   └── weekly.py           # Monday: build, check and post the brief
+│   │   ├── weekly.py           # Monday: build, check and post the brief
+│   │   └── content.py          # Safety tips and fallback lessons (edit freely)
 │   │
 │   ├── kyc_form/               # The KYC questions, shared by onboarding, members and the import
 │   │   ├── fields.py           # The question list, labels, display formatting
@@ -603,6 +613,7 @@ chat ID, add the bot to the group and send `/chatid` there.
 | `MIN_INDUCTION_SECONDS` | Optional | 10 days | Minimum time in the induction group before a post is accepted. |
 | `ATL_DB_PATH` | Optional | `<project root>/atl_bot.db` | Where the SQLite file lives; `~` is expanded. |
 | `LEADERSHIP_GROUP_ID` | No | 0 | Members of this group are automatically admins. Alpha must be an admin there. |
+| `FELICITATION_GROUP_ID` | For brief birthdays | 0 | Where birthdays are celebrated; the weekly brief reads it for birthdays only. Alpha must be an admin there. Unset = no birthdays in the brief. |
 | `ATL_BACKUP_BUCKET` | For backups | — | S3 bucket used by `scripts/backup_db.py`. |
 
 Blank values are treated as unset. These are fixed in `src/config.py` rather
@@ -654,7 +665,8 @@ never half-applies.
 | `member_roles` | Roles beyond ordinary member (today: admin), and where each came from: the owner (`/admin`) or the leadership group. No row = ordinary member. |
 | `brief_groups` | Groups Alpha is in, and whether the weekly brief reads them. |
 | `brief_messages` | Group messages waiting to be digested. Deleted once their day is. |
-| `brief_days` | Per group per day: message count, replies received per member, Gemini's digest. Deleted once the week's brief is sent. |
+| `brief_days` | Per group per day: message count, who posted, replies received per member, Gemini's digest. Deleted once the week's brief is sent. |
+| `brief_birthdays` | Who was wished a happy birthday in the felicitation group, and when. Deleted once the week's brief is sent. |
 | `brief_weeks` | One row per weekly brief, so it is never sent twice. |
 
 The database holds real member PII (names, phone numbers, addresses, ID

@@ -267,15 +267,26 @@ CREATE INDEX IF NOT EXISTS idx_brief_messages_sent
 
 -- One row per group per finished UTC day: counts, plus Gemini's digest
 -- (NULL if Gemini kept failing). Deleted once that week's brief is sent.
--- replies_json maps user_id to the number of replies their messages got.
+-- replies_json maps user_id to the number of replies their messages got;
+-- senders_json lists who posted that day.
 CREATE TABLE IF NOT EXISTS brief_days (
     day           TEXT NOT NULL,   -- 'YYYY-MM-DD', UTC
     chat_id       INTEGER NOT NULL,
     message_count INTEGER NOT NULL,
     replies_json  TEXT NOT NULL,
+    senders_json  TEXT NOT NULL DEFAULT '[]',
     digest_json   TEXT,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (day, chat_id)
+);
+
+-- People wished a happy birthday in the felicitation group, taken from the
+-- @mentions in those messages. No message text is stored. celebrant is
+-- 'id:<telegram id>' or 'u:<username, lowercase>'. Deleted with the week.
+CREATE TABLE IF NOT EXISTS brief_birthdays (
+    day       TEXT NOT NULL,       -- 'YYYY-MM-DD', UTC
+    celebrant TEXT NOT NULL,
+    PRIMARY KEY (day, celebrant)
 );
 
 -- One row per weekly brief, so a restart can never post one twice.

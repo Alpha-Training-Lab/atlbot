@@ -25,8 +25,9 @@ from src.brief import capture as brief_capture
 from src.brief.digest import digest_finished_days
 from src.brief.weekly import publish_weekly_brief
 from src.common.cleanup import sweep_deletions
-from src.config import (BOT_TOKEN, INDUCTION_GROUP_ID, LEADERSHIP_GROUP_ID, MAIN_GROUP_ID,
-                        ONBOARDING_GROUP_ID, OWNER_USER_ID)
+from src.config import (BOT_TOKEN, FELICITATION_GROUP_ID, INDUCTION_GROUP_ID,
+                        LEADERSHIP_GROUP_ID, MAIN_GROUP_ID, ONBOARDING_GROUP_ID,
+                        OWNER_USER_ID)
 from src.members import (legacy, main_group, profile, profile_edit, roles,
                          special, vouch)
 from src.onboarding import access_review, induction, kyc
@@ -62,6 +63,16 @@ def build_app() -> Application:
   # Before everything else, and never stops an update. Stores text from the
   # groups the brief reads; never the leadership, onboarding or induction
   # group. Also notices when Alpha is added to or leaves a group.
+  # The felicitation group comes first: it's read for birthdays only, and
+  # within a group only the first matching handler runs.
+  if FELICITATION_GROUP_ID:
+    app.add_handler(
+      MessageHandler(filters.Chat(FELICITATION_GROUP_ID)
+                     & (filters.TEXT | filters.CAPTION)
+                     & filters.UpdateType.MESSAGE,
+                     brief_capture.capture_birthday),
+      group=-3,
+    )
   app.add_handler(
     MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND
                    & filters.UpdateType.MESSAGE,
