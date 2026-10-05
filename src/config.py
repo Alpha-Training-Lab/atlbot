@@ -70,3 +70,26 @@ VOUCH_TAG_DELETE_SECONDS = 6 * 3600   # main-group "send me Hi" tag lifetime
 
 # ----- Group links -------------------------
 INDUCTION_PINNED_URL = os.environ.get("INDUCTION_GROUP_PINNED_MESSAGE")
+
+# ----- Weekly brief (src/brief/) ---------------------------
+# Posted in the induction group every Monday from BRIEF_HOUR_UTC. If Alpha
+# is down then, it posts when it's back, up to BRIEF_LAST_HOUR_UTC that day.
+BRIEF_HOUR_UTC = 9
+BRIEF_LAST_HOUR_UTC = 21
+# Groups whose messages are never stored or sent to Gemini, whatever else
+# says: leadership is private, the onboarding group holds KYC cards, and the
+# induction group is where the brief is posted.
+BRIEF_NEVER_READ = {
+  g for g in (LEADERSHIP_GROUP_ID, ONBOARDING_GROUP_ID, INDUCTION_GROUP_ID) if g
+}
+# A day whose digest keeps failing is given up after this many days: its
+# counts are kept, its messages deleted, and it adds no highlights.
+BRIEF_DIGEST_GIVE_UP_DAYS = 2
+# Most text from one group's day sent to Gemini. The newest is kept.
+BRIEF_DIGEST_MAX_CHARS = 60_000
+# Safety net: nothing the brief stores outlives this, whatever happened.
+BRIEF_KEEP_DAYS = 14
+# Anniversaries the brief celebrates: (name, founding date 'YYYY-MM-DD').
+BRIEF_MILESTONES = [
+  ("ATL Men's Forum", "2020-07-20"),
+]

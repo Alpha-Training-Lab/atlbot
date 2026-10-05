@@ -427,10 +427,48 @@ internally (for example, an "Other" decline prompt is matched through the
 `reason_prompts` table, not its wording). The one exception is the owner's
 private alert about an unauthorised join.
 
+### Weekly brief (`src/brief/`)
+
+Every Monday from 09:00 UTC Alpha posts a community brief in the induction
+group. It is fully autonomous: nobody writes highlights, approves it or gets
+a copy.
+
+1. **Capture** (`capture.py`, handler group -3, before everything else and
+   never stopping an update): text messages from the groups the brief reads
+   go into `brief_messages`. Not commands, edits, bots or anonymous admins.
+   A reply counts toward "most helpful" unless it's to a bot or to themselves.
+2. **Digest** (`digest.py`, hourly job, but only days that have ended): each
+   group's day becomes counts plus a short Gemini digest in `brief_days`, and
+   that day's messages are deleted in the same transaction. Gemini sees text
+   only, never who wrote it. If Gemini fails the day is retried; after
+   `BRIEF_DIGEST_GIVE_UP_DAYS` it is saved without a digest and the messages
+   are deleted anyway.
+3. **Brief** (`weekly.py`, every 10 minutes, acts only on Monday between
+   `BRIEF_HOUR_UTC` and `BRIEF_LAST_HOUR_UTC`): numbers from SQLite, plus
+   Gemini's merged highlights, lessons and celebrations. Gemini's part is used
+   only if it passes a pattern check in code and then a Gemini compliance
+   check; otherwise the brief is numbers only. `brief_weeks` makes sure it is
+   sent once, and the week's digests are deleted once it is.
+
+**Which groups:** the main group from the start; any group Alpha is added to
+later if the owner or an admin added it. Never the leadership, onboarding or
+induction group (`config.BRIEF_NEVER_READ`).
+
+**Who is named:** only active members who answered "Yes, mention me" to the
+"Weekly brief" question (last KYC question; existing members can set it with
+/profile). No answer counts as No. Gemini's sections never name anyone.
+
+**Retention:** raw messages until their day is digested (normally just after
+midnight UTC), digests until the brief is sent, nothing past
+`BRIEF_KEEP_DAYS`. Database backups taken in between will contain them.
+
 ### Repeating jobs
 
 `members/vouch.sweep` runs every 30 minutes: reminders and expiry for
 vouch requests (above).
+
+`brief/digest.digest_finished_days` runs every hour and
+`brief/weekly.publish_weekly_brief` every 10 minutes (Weekly brief, above).
 
 `members/profile.sweep_idle_sessions` and
 `members/profile_edit.sweep_idle_sessions` run every 5 minutes and close
@@ -477,7 +515,12 @@ atlbot/
 │   ├── assistant/              # Alpha, the LLM
 │   │   ├── chat.py             # DM catch-all
 │   │   ├── context.py          # What Alpha is told about the member's status
-│   │   └── llm.py              # Gemini client
+│   │   └── llm.py              # Gemini client (chat, induction intent, weekly brief)
+│   │
+│   ├── brief/                  # The weekly community brief
+│   │   ├── capture.py          # Store group messages; track groups Alpha joins
+│   │   ├── digest.py           # Daily counts + Gemini digest, then delete messages
+│   │   └── weekly.py           # Monday: build, check and post the brief
 │   │
 │   ├── kyc_form/               # The KYC questions, shared by onboarding, members and the import
 │   │   ├── fields.py           # The question list, labels, display formatting
@@ -496,7 +539,8 @@ atlbot/
 │       ├── deletions.py        # Scheduled deletions
 │       ├── legacy.py           # Old-website records, matching keys, linking
 │       ├── profile.py          # Profile sessions, edit sessions, approvals
-│       └── main_group.py       # Owner-added members, invites, in-group nudges
+│       ├── main_group.py       # Owner-added members, invites, in-group nudges
+│       └── brief.py            # Weekly brief: groups, messages, digests, weeks
 │
 ├── resources/                  # Read by src/assistant/llm.py at startup
 │   ├── prompts/alpha_persona.md
@@ -608,6 +652,10 @@ never half-applies.
 | `reason_prompts` | Which member an admin's "Other" decline prompt is about, so the prompt text needn't show their id. |
 | `special_members` | The owner's Legacy Members: linked by Telegram id, or waiting by username until first seen. |
 | `member_roles` | Roles beyond ordinary member (today: admin), and where each came from: the owner (`/admin`) or the leadership group. No row = ordinary member. |
+| `brief_groups` | Groups Alpha is in, and whether the weekly brief reads them. |
+| `brief_messages` | Group messages waiting to be digested. Deleted once their day is. |
+| `brief_days` | Per group per day: message count, replies received per member, Gemini's digest. Deleted once the week's brief is sent. |
+| `brief_weeks` | One row per weekly brief, so it is never sent twice. |
 
 The database holds real member PII (names, phone numbers, addresses, ID
 photos by reference) and is gitignored. It must never be committed.

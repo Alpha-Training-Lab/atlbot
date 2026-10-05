@@ -1,6 +1,6 @@
 """Alpha's entry point: wires every feature's handlers into one bot and runs it.
 
-Telegram updates pass through handler groups in order: -2, -1, 0, then 1.
+Telegram updates pass through handler groups in order: -3, -2, -1, 0, then 1.
 Within a group, only the FIRST matching handler runs; a handler can also
 raise ApplicationHandlerStop to keep an update from reaching later groups.
 So the order below is the bot's priority list. Read it top to bottom to see
@@ -21,6 +21,9 @@ from telegram.ext import (
 
 from src import commands, db
 from src.assistant.chat import handle_alpha_message
+from src.brief import capture as brief_capture
+from src.brief.digest import digest_finished_days
+from src.brief.weekly import publish_weekly_brief
 from src.common.cleanup import sweep_deletions
 from src.config import (BOT_TOKEN, INDUCTION_GROUP_ID, LEADERSHIP_GROUP_ID, MAIN_GROUP_ID,
                         ONBOARDING_GROUP_ID, OWNER_USER_ID)
@@ -51,6 +54,25 @@ def build_app() -> Application:
     app.job_queue.run_repeating(vouch.sweep, interval=1800, first=60)
     app.job_queue.run_repeating(profile.sweep_idle_sessions, interval=300, first=120)
     app.job_queue.run_repeating(profile_edit.sweep_idle_sessions, interval=300, first=150)
+    # Weekly brief (src/brief/): digest finished days hourly; post on Monday.
+    app.job_queue.run_repeating(digest_finished_days, interval=3600, first=180)
+    app.job_queue.run_repeating(publish_weekly_brief, interval=600, first=240)
+
+  # ----- group -3: weekly brief capture (brief/capture.py) ---------------
+  # Before everything else, and never stops an update. Stores text from the
+  # groups the brief reads; never the leadership, onboarding or induction
+  # group. Also notices when Alpha is added to or leaves a group.
+  app.add_handler(
+    MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND
+                   & filters.UpdateType.MESSAGE,
+                   brief_capture.capture_message),
+    group=-3,
+  )
+  app.add_handler(
+    ChatMemberHandler(brief_capture.track_alpha_groups,
+                      ChatMemberHandler.MY_CHAT_MEMBER),
+    group=-3,
+  )
 
   # ----- group -2: vouches making contact (members/vouch.py) -------------
   # First of all: a named vouch's "Hi" is how Alpha learns who they are.
@@ -216,6 +238,7 @@ def build_app() -> Application:
 
 def main() -> None:
   db.init_db()
+  brief_capture.seed_groups()
   build_app().run_polling(allowed_updates=Update.ALL_TYPES)
 
 
