@@ -682,6 +682,10 @@ Standalone tools in `scripts/`, run from the project root with the venv:
 - `list_model.py`: list the Gemini models available to the API key.
 - `stats.py`: a read-only snapshot (members, backlog, admin queue, vouches).
   Counts only, never anyone's details, so its output is safe to share.
+- `preview_brief.py --db <live db> [--sample] [--week YYYY-MM-DD] [--no-send]`:
+  builds the weekly brief exactly as Monday's job would (real Gemini calls),
+  on a throwaway copy of the database, and sends it to the owner's DM only.
+  `--sample` adds made-up chat and members so every section shows.
 
 `inspect_db.py`, `inspect_data.py`, `wipe_test_data.py` and `test_gemini.py`
 are local-only and gitignored. `inspect_data.py` prints PII; never share its
