@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14.4"  # must match the server
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check . --select E4,E7,E9,F
+      - run: python -m compileall -q .
+      - run: python -m pytest tests
