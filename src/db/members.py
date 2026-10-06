@@ -1,6 +1,6 @@
 """Members, their status, and the audit trail (member_events)."""
 from src.db.connection import get_conn
-from src.db.schema import ALL_STATUSES, STATUS_ACTIVE
+from src.db.schema import ALL_STATUSES, STATUS_ACTIVE, STATUS_REMOVED
 # ===============================================================
 
 
@@ -9,6 +9,12 @@ def get_member(user_id):
     return conn.execute(
       "SELECT * FROM members WHERE user_id = ?", (user_id,)
     ).fetchone()
+
+
+def is_removed(user_id):
+  """Removed from ATL: expelled with /expel, or banned from the main group."""
+  member = get_member(user_id)
+  return member is not None and member["status"] == STATUS_REMOVED
 
 
 def find_member_by_username(username_key):
@@ -70,6 +76,7 @@ def upsert_active(conn, user_id, username, first_name, last_name):
       first_name = COALESCE(excluded.first_name, members.first_name),
       last_name  = COALESCE(excluded.last_name, members.last_name),
       status     = excluded.status,
+      status_before_removal = NULL,
       updated_at = datetime('now')
     """,
     (user_id, username, first_name, last_name, STATUS_ACTIVE),
@@ -81,6 +88,14 @@ def set_status(user_id, status, actor_user_id=None, note=None):
   if status not in ALL_STATUSES:
     raise ValueError(f"Unknown status: {status}")
   with get_conn() as conn:
+    if status == STATUS_REMOVED:
+      # Remember what they were, so a reinstatement can't promote an
+      # applicant to member (src/db/manage.py, reinstate_member).
+      conn.execute(
+        "UPDATE members SET status_before_removal = status "
+        "WHERE user_id = ? AND status != ?",
+        (user_id, STATUS_REMOVED),
+      )
     conn.execute(
       "UPDATE members SET status = ?, updated_at = datetime('now') "
       "WHERE user_id = ?",

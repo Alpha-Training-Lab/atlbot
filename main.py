@@ -29,7 +29,7 @@ from src.common.cleanup import sweep_deletions
 from src.config import (BOT_TOKEN, FELICITATION_GROUP_ID, INDUCTION_GROUP_ID,
                         LEADERSHIP_GROUP_ID, MAIN_GROUP_ID, ONBOARDING_GROUP_ID,
                         OWNER_USER_ID)
-from src.members import (legacy, main_group, profile, profile_edit, roles,
+from src.members import (legacy, manage, main_group, profile, profile_edit, roles,
                          special, vouch)
 from src.onboarding import access_review, induction, kyc
 # =========================================================================================
@@ -138,6 +138,16 @@ def build_app() -> Application:
   app.add_handler(CommandHandler("unadmin", roles.cmd_unadmin, filters=owner_dm), group=0)
   app.add_handler(CommandHandler("askmentions", brief_mentions.cmd_ask_mentions,
                                  filters=owner_dm), group=0)
+  app.add_handler(CommandHandler("reinstate", manage.cmd_reinstate, filters=owner_dm), group=0)
+  app.add_handler(CommandHandler("obtlead", manage.cmd_obtlead, filters=owner_dm), group=0)
+  app.add_handler(CommandHandler("unobtlead", manage.cmd_unobtlead, filters=owner_dm), group=0)
+
+  # ----- group 0: look members up and expel them (members/manage.py) -----
+  # The owner and onboarding leads, in a private chat only.
+  managers_dm = manage.MANAGERS & filters.ChatType.PRIVATE
+  app.add_handler(CommandHandler("member", manage.cmd_member, filters=managers_dm), group=0)
+  app.add_handler(CommandHandler("expel", manage.cmd_expel, filters=managers_dm), group=0)
+  app.add_handler(CallbackQueryHandler(manage.handle_button, pattern=r"^mm:"), group=0)
 
   # ----- group 0: may the weekly brief name you? (brief/mentions.py) ----
   app.add_handler(CommandHandler("mentions", brief_mentions.show_choice,

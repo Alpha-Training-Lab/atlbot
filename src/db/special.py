@@ -3,10 +3,17 @@
 Callers pass usernames already normalised (db.username_key)."""
 from src.db.connection import get_conn
 from src.db.members import upsert_active
-from src.db.schema import STATUS_ACTIVE
+from src.db.schema import STATUS_ACTIVE, STATUS_REMOVED
 # ===========================================================================
 
 _NOTE = "added as a Legacy Member by the owner"
+
+
+def _is_removed(conn, user_id):
+  row = conn.execute(
+    "SELECT status FROM members WHERE user_id = ?", (user_id,)
+  ).fetchone()
+  return row is not None and row["status"] == STATUS_REMOVED
 
 
 def _activate(conn, user_id, username, first_name, last_name, added_by):
@@ -26,8 +33,11 @@ def add_special(user_id, username, first_name, last_name, username_key, added_by
   """Add someone whose Telegram id is known: their row is created or
   refreshed, set active whatever it was (the owner's explicit choice), and
   tagged. Any waiting entry for their username is used up. Returns False if
-  they were already on the list."""
+  they were already on the list, or, changing nothing, if they're expelled:
+  only /reinstate undoes an expulsion."""
   with get_conn() as conn:
+    if _is_removed(conn, user_id):
+      return False
     already = conn.execute(
       "SELECT 1 FROM special_members WHERE user_id = ?", (user_id,)
     ).fetchone()
@@ -75,6 +85,8 @@ def claim_special(user_id, username, first_name, last_name, username_key):
     ).fetchone()
     if row is None:
       return False
+    if _is_removed(conn, user_id):
+      return False   # expelled: the entry stays waiting, in case of /reinstate
     if conn.execute(
         "SELECT 1 FROM special_members WHERE user_id = ?", (user_id,)
     ).fetchone():
