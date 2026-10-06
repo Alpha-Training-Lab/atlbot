@@ -54,7 +54,7 @@ async def digest_finished_days(context=None):
 
       digest = None
       if not db.brief_day_exists(chat_id, day):   # late messages: counts only
-        digest = await digest_day(_as_text(messages))
+        digest = await digest_day(_as_text(messages), day)
         too_old = (today - date.fromisoformat(day)).days > BRIEF_DIGEST_GIVE_UP_DAYS
         if digest is None and not too_old:
           logger.warning("Brief: digest for chat %s on %s failed, will retry",

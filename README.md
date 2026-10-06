@@ -448,7 +448,10 @@ writes highlights, approves it or gets a copy.
    `BRIEF_HOUR_UTC` and `BRIEF_LAST_HOUR_UTC`). From SQLite: week in numbers
    (this week's activity only, never totals; a count below `BRIEF_HIDE_BELOW`
    is left out), birthdays, milestones, most helpful. From Gemini: a summary
-   of the week's discussions, the lesson of the week and members' wins, used
+   of the week's discussions, the lesson of the week, members' wins and
+   "Coming up this week" (events announced in the chat, with dates Gemini
+   works out from the posting day; code keeps only dates in the week ahead
+   that were actually announced), used
    only if they pass a pattern check in code and then a Gemini compliance
    check; otherwise those sections are left out. The safety tip rotates
    through the list in `content.py`, shuffled once and taken one per week,

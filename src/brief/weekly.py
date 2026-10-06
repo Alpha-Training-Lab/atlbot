@@ -7,9 +7,9 @@ inside ATL, then shows them how to get in.
 
 Two parts:
   - numbers and names straight from SQLite: nothing an LLM can get wrong;
-  - the week's summary, lesson and wins, which Gemini writes from the daily
-    digests. Used ONLY if they pass two checks: a pattern check in code,
-    then a Gemini compliance check.
+  - the week's summary, lesson, wins and what's coming up, which Gemini
+    writes from the daily digests. Used ONLY if they pass two checks: a
+    pattern check in code, then a Gemini compliance check.
 If the Gemini part fails, the brief still goes out without it. Nobody
 approves it and nobody is sent a copy.
 
@@ -139,7 +139,7 @@ def _helpers(day_rows, limit=3):
 
 def _milestones(week_start):
   """Anniversaries in the coming week (this Monday to Sunday)."""
-  monday = date.fromisoformat(week_start) + timedelta(days=7)
+  monday, _ = _coming_week(week_start)
   found = []
   for name, founded in BRIEF_MILESTONES:
     start = date.fromisoformat(founded)
@@ -150,15 +150,47 @@ def _milestones(week_start):
 
 
 # ----- Gemini's part ---------------------------------------------------
-async def _gemini_parts(day_rows):
-  """{summary, lesson, celebrations} if they pass both checks, else None."""
-  notes = [json.loads(r["digest_json"]) for r in day_rows if r["digest_json"]]
+def _coming_week(week_start):
+  """This Monday to Sunday: the week ahead of the readers."""
+  monday = date.fromisoformat(week_start) + timedelta(days=7)
+  return monday, monday + timedelta(days=6)
+
+
+def _split_notes(day_rows, week_start):
+  """(daily notes without events, events dated in the coming week). Each
+  event keeps the day it was announced, so a changed date can be settled."""
+  first, last = _coming_week(week_start)
+  notes, candidates = [], []
+  for row in day_rows:
+    if not row["digest_json"]:
+      continue
+    day_notes = json.loads(row["digest_json"])
+    for event in day_notes.pop("upcoming", []):
+      if first <= date.fromisoformat(event["date"]) <= last:
+        candidates.append({**event, "announced_on": row["day"]})
+    notes.append(day_notes)
+  return notes, candidates
+
+
+async def _gemini_parts(day_rows, week_start):
+  """{summary, lesson, celebrations, coming_up} if they pass both checks,
+  else None."""
+  notes, candidates = _split_notes(day_rows, week_start)
   if not notes:
     return None
-  parts = await merge_week(json.dumps(notes, ensure_ascii=False))
-  if not parts or not (parts["summary"] or parts["lesson"] or parts["celebrations"]):
+  parts = await merge_week(json.dumps(
+    {"daily_notes": notes, "upcoming_candidates": candidates}, ensure_ascii=False))
+  if not parts:
     return None
-  text = "\n".join([parts["summary"], parts["lesson"], *parts["celebrations"]])
+  # Events only on dates that were really announced for the coming week.
+  allowed = {c["date"] for c in candidates}
+  parts["coming_up"] = sorted((e for e in parts["coming_up"] if e["date"] in allowed),
+                              key=lambda e: e["date"])
+  if not (parts["summary"] or parts["lesson"] or parts["celebrations"]
+          or parts["coming_up"]):
+    return None
+  text = "\n".join([parts["summary"], parts["lesson"], *parts["celebrations"],
+                    *(e["what"] for e in parts["coming_up"])])
   if _RISKY.search(text):
     logger.warning("Brief: Gemini's part blocked by the pattern check")
     return None
@@ -183,7 +215,7 @@ async def gather(week_start, bot_username=None):
     "birthday_names": birthday_names,
     "helpers": _helpers(day_rows),
     "milestones": _milestones(week_start),
-    "gemini": await _gemini_parts(day_rows),
+    "gemini": await _gemini_parts(day_rows, week_start),
   }
 
 
@@ -243,6 +275,13 @@ def render(stats, use_gemini=True):
 
   if stats["milestones"]:
     blocks.append("🎉 MILESTONES\n" + "\n".join(f"• {m}" for m in stats["milestones"]))
+
+  if gemini and gemini["coming_up"]:
+    lines = []
+    for event in gemini["coming_up"]:
+      d = date.fromisoformat(event["date"])
+      lines.append(f"• {d:%a} {_day_label(d)}: {event['what']}")
+    blocks.append("📅 COMING UP THIS WEEK\nInside the main group:\n" + "\n".join(lines))
 
   blocks.append(_how_to_join(stats["bot_username"]))
   blocks.append("🛡️ STAY SAFE\n" + pick_for_week(SAFETY_TIPS, week_start, salt="safety"))

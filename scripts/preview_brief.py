@@ -65,9 +65,11 @@ SAMPLE_CHAT = [
   (3, 15, ADA, CHIOMA, "Congratulations Chioma! Well deserved."),
   (4, 19, ADA, None, "Journal every trade: why you entered, what you felt, what you learned."),
   (4, 19, CHIOMA, ADA, "Starting my trading journal this weekend."),
+  (4, 21, ADA, None, "Next class is on Wednesday at 8pm WAT: reading candlestick charts."),
   (5, 10, TUNDE, None, "Saturday review: I broke my own rules twice this week. Discipline is the hard part."),
   (5, 10, ADA, TUNDE, "Honest reflection. Noticing it is the first step."),
   (6, 16, CHIOMA, None, "Thank you all for a great week of learning."),
+  (6, 17, ADA, None, "Reminder: Q&A session this Saturday at 4pm WAT. Bring your questions."),
 ]
 
 
