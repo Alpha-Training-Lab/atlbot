@@ -54,6 +54,40 @@ def test_expel_cancels_open_vouch_requests(fresh_db):
   assert db.get_vouch_request(req)["status"] == "cancelled"
 
 
+def test_expel_closes_open_induction_application(fresh_db):
+  db = fresh_db
+  _member(db, 1, "ada", status=db.STATUS_PENDING_REVIEW)
+  app_id = db.create_application(1, "summary")
+  db.expel_member(1, ACTOR, "x")
+  app = db.get_application(app_id)
+  assert app["decision"] == "declined" and app["decided_by"] == ACTOR
+  # The old card's Approve button can no longer act on it.
+  assert not db.decide_application(app_id, "approved", LEAD)
+  assert db.get_member(1)["status"] == db.STATUS_REMOVED
+
+
+def test_induction_card_refuses_an_expelled_member(fresh_db):
+  import asyncio
+  from types import SimpleNamespace
+  from unittest.mock import AsyncMock
+  from src.config import ONBOARDING_GROUP_ID
+  from src.onboarding import induction
+  db = fresh_db
+  _member(db, 1, "ada", status=db.STATUS_REMOVED)
+  app_id = db.create_application(1, "summary")   # open, as if expel missed it
+  query = SimpleNamespace(
+    data=f"ind:approve:{app_id}",
+    message=SimpleNamespace(chat=SimpleNamespace(id=ONBOARDING_GROUP_ID)),
+    from_user=SimpleNamespace(id=LEAD, first_name="Lead"),
+    answer=AsyncMock(), edit_message_reply_markup=AsyncMock(),
+  )
+  asyncio.run(induction.handle_induction_decision(
+    SimpleNamespace(callback_query=query), SimpleNamespace(bot=AsyncMock())))
+  assert db.get_member(1)["status"] == db.STATUS_REMOVED
+  assert db.get_application(app_id)["decision"] is None
+  query.answer.assert_awaited_once()
+
+
 def test_expelled_member_is_not_relinked_from_the_old_website(fresh_db):
   db = fresh_db
   _member(db, 1, "ada")

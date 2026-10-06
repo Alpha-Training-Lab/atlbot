@@ -235,6 +235,15 @@ async def handle_induction_decision(update, context: ContextTypes.DEFAULT_TYPE):
   admin = query.from_user
   admin_name = admin.first_name or str(admin.id)
 
+  # Expelling closes their open application; this is the backstop, since
+  # either decision below would move them out of removed.
+  pending = db.get_application(app_id)
+  owner = db.get_member(pending["user_id"]) if pending else None
+  if owner is not None and owner["status"] == db.STATUS_REMOVED:
+    await query.answer("They've been expelled.", show_alert=True)
+    await query.edit_message_reply_markup(reply_markup=None)
+    return
+
   decision = "approved" if action == "approve" else "declined"
   if not db.decide_application(app_id, decision, admin.id):
     await query.answer("Already handled.", show_alert=True)

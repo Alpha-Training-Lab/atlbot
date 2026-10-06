@@ -101,7 +101,8 @@ def member_summary(user_id):
 def expel_member(user_id, actor_user_id, reason):
   """Mark a member removed, in ONE transaction: status, the audit trail with
   the reason, and every route that could make them active again (role,
-  manager access, Legacy Member list, open vouch requests, open sessions).
+  manager access, Legacy Member list, open vouch requests, open induction
+  applications, open sessions).
   Returns False if they weren't on record or were already removed."""
   with get_conn() as conn:
     member = conn.execute(
@@ -133,6 +134,13 @@ def expel_member(user_id, actor_user_id, reason):
       "UPDATE vouch_requests SET status = 'cancelled', decided_at = datetime('now') "
       "WHERE user_id = ? AND status = 'pending'",
       (user_id,),
+    )
+    # Otherwise Approve/Decline on their old induction card would move them
+    # out of removed: the card's buttons only check the application is open.
+    conn.execute(
+      "UPDATE applications SET decision = 'declined', decided_by = ?, "
+      "decided_at = datetime('now') WHERE user_id = ? AND decision IS NULL",
+      (actor_user_id, user_id),
     )
     conn.execute("DELETE FROM profile_sessions WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM edit_sessions WHERE user_id = ?", (user_id,))
