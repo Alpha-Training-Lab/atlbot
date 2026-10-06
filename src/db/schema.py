@@ -299,4 +299,13 @@ CREATE TABLE IF NOT EXISTS brief_weeks (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     sent_at    TEXT
 );
+
+-- People the owner trusts to look members up and expel them (the onboarding
+-- lead). Separate from roles: the leadership group makes people admins
+-- automatically, and that must never hand out access to members' data.
+CREATE TABLE IF NOT EXISTS member_managers (
+    user_id    INTEGER PRIMARY KEY REFERENCES members(user_id),
+    granted_by INTEGER,
+    granted_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """

@@ -59,8 +59,14 @@ from src.db.brief import (
   save_brief_message, set_brief_group, user_ids_for_usernames,
   week_celebrants,
 )
+from src.db.manage import (
+  expel_member, grant_manager, is_manager, list_managers, member_summary,
+  reinstate_member, revoke_manager, search_members,
+)
 
 __all__ = [
+  "expel_member", "grant_manager", "is_manager", "list_managers",
+  "member_summary", "reinstate_member", "revoke_manager", "search_members",
   "get_conn", "init_db", "ALL_STATUSES", "STATUS_ACTIVE",
   "STATUS_AWAITING_DM", "STATUS_DECLINED", "STATUS_KYC_IN_PROGRESS",
   "STATUS_PENDING_ACCESS", "STATUS_PENDING_REVIEW",

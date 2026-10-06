@@ -213,6 +213,9 @@ async def in_leadership_group(bot, user_id):
 def _make_leader_admin(user):
   if user.is_bot or is_owner(user.id):
     return False
+  member = db.get_member(user.id)
+  if member is not None and member["status"] == db.STATUS_REMOVED:
+    return False   # expelled: being in leadership doesn't bring them back
   return db.grant_role(user.id, user.username, user.first_name, user.last_name,
                        db.ADMIN, None, source=db.FROM_LEADERSHIP)
 

@@ -439,6 +439,38 @@ a callback. Adding a new role means adding it to `ROLES` in `db/roles.py`; the
 table needs no change. Card buttons in the onboarding group are not
 role-gated yet: anyone in that group can still use them.
 
+### Looking members up and expelling them (`members/manage.py`)
+
+The owner, and the onboarding leads the owner names with `/obtlead @name`,
+can in a private chat with Alpha:
+
+- `/member @username` (or `/member <name>` to search) to see a member's full
+  record with their ID photos. The record deletes itself after 10 minutes,
+  and every lookup is logged with who looked (`member_viewed`).
+- `/expel @username`, or the **Expel** button on a record: pick a reason,
+  confirm, and Alpha marks them removed, bans them from every ATL group it
+  manages (main, induction, leadership), tells them why, and strips any
+  role, onboarding-lead access or Legacy Member place, so nothing can make
+  them active again. Onboarding leads can only expel ordinary members; the
+  owner is told whenever a lead expels someone.
+- The owner can undo it with `/reinstate @username`.
+
+Onboarding leads are a separate permission (`member_managers`), not a role:
+the leadership group makes people admins automatically, and that must never
+give access to members' data. `/obtlead` lists them, `/unobtlead @name`
+removes one.
+
+### Exporting everything (`scripts/export_members.py`)
+
+Owner only, on the server: `.venv/bin/python scripts/export_members.py`
+writes `data/exports/atl_members_<time>.zip` with `members.xlsx` (one row per
+member, every detail, links to each photo) and an `ids/` folder of the ID
+photos downloaded from Telegram. `--status active` limits it to one status;
+`--no-photos` skips the photos. The zip holds everyone's personal data and
+IDs: copy it off, keep it private, and delete it from the server and your
+computer when done. It's a generated export; the database stays the only
+source of truth.
+
 ### What admins see
 
 Cards, photo captions, prompts and invite-link names identify a member by
@@ -767,6 +799,7 @@ never half-applies.
 | `vouch_requests` | Each request for a vouch to confirm a member, who the vouch turned out to be, and the outcome (yes, no, expired, not a member, cancelled). |
 | `reason_prompts` | Which member an admin's "Other" decline prompt is about, so the prompt text needn't show their id. |
 | `special_members` | The owner's Legacy Members: linked by Telegram id, or waiting by username until first seen. |
+| `member_managers` | Onboarding leads: who may look members up and expel them. Granted by the owner only. |
 | `member_roles` | Roles beyond ordinary member (today: admin), and where each came from: the owner (`/admin`) or the leadership group. No row = ordinary member. |
 | `brief_groups` | Groups Alpha is in, and whether the weekly brief reads them. |
 | `brief_messages` | Group messages waiting to be digested. Deleted once their day is. |
