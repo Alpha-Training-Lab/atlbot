@@ -322,7 +322,9 @@ async def cmd_reinstate(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Send /reinstate @username")
     return
   member, _ = _find(context.args[:1])
-  if member is None or not db.reinstate_member(member["user_id"], update.effective_user.id):
+  restored = (db.reinstate_member(member["user_id"], update.effective_user.id)
+              if member is not None else None)
+  if restored is None:
     await update.message.reply_text("Nobody expelled with that username.")
     return
   for chat_id in (MAIN_GROUP_ID, INDUCTION_GROUP_ID, LEADERSHIP_GROUP_ID):
@@ -331,16 +333,25 @@ async def cmd_reinstate(update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.unban_chat_member(chat_id, member["user_id"], only_if_banned=True)
       except TelegramError:
         logger.warning("Could not unban a reinstated member", exc_info=True)
+
+  if restored == db.STATUS_ACTIVE:
+    to_them = ("Your ATL membership has been restored. Message me any time "
+               "and I'll send your link back into the main group.")
+    to_owner = (f"✅ {handle_or_name(member)} is an active member again and unbanned. "
+                "When they message Alpha they'll get a link back into the main group.")
+  else:
+    to_them = ("You're welcome to apply to ATL again. Please start in the "
+               "induction group and follow the steps there.")
+    to_owner = (f"✅ {handle_or_name(member)} is unbanned. They were still an "
+                "applicant when expelled, so they start onboarding again from the "
+                "induction group: induction review, KYC and vouch as normal.")
   try:
-    await context.bot.send_message(
-      member["user_id"], "Your ATL membership has been restored. Message me "
-                         "any time and I'll send your link back into the main group.")
+    await context.bot.send_message(member["user_id"], to_them)
   except TelegramError:
     pass
   await update.message.reply_text(
-    f"✅ {handle_or_name(member)} is active again and unbanned. When they message "
-    "Alpha they'll get a link back into the main group. Roles, onboarding-lead "
-    "access and Legacy Member status are not restored; add them again if needed.")
+    f"{to_owner} Roles, onboarding-lead access and Legacy Member status are not "
+    "restored; add them again if needed.")
 
 
 async def cmd_obtlead(update, context: ContextTypes.DEFAULT_TYPE):

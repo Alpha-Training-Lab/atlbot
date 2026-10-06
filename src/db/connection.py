@@ -33,6 +33,9 @@ _ADDED_COLUMNS = [
   ("edit_sessions", "last_active_at", "TEXT", "datetime('now')"),
   # Only matters for a database made by an early test of the weekly brief.
   ("brief_days", "senders_json", "TEXT", "'[]'"),
+  # Members removed before this was recorded keep NULL; reinstate_member
+  # explains why that reads as "was active".
+  ("members", "status_before_removal", "TEXT", "NULL"),
 ]
 
 

@@ -22,6 +22,10 @@ ALL_STATUSES = (
 _STATUS_SQL_LIST = ", ".join(f"'{s}'" for s in ALL_STATUSES)
 
 SCHEMA = f"""
+-- status_before_removal: while removed, the status they had before, so
+-- /reinstate knows whether they were a member or still an applicant.
+-- NULL otherwise. (Kept out of the column list: comments there break
+-- SQLite's ALTER TABLE ... DROP COLUMN.)
 CREATE TABLE IF NOT EXISTS members (
     user_id         INTEGER PRIMARY KEY,
     username        TEXT,
@@ -32,7 +36,8 @@ CREATE TABLE IF NOT EXISTS members (
     kyc_field_index INTEGER NOT NULL DEFAULT 0,
     kyc_attempts    INTEGER NOT NULL DEFAULT 0,
     first_seen      TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    status_before_removal TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_members_status   ON members(status);

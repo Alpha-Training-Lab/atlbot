@@ -1,7 +1,7 @@
 """Member roles. No row in member_roles means an ordinary member."""
 from src.db.connection import get_conn
 from src.db.members import upsert_active
-from src.db.schema import STATUS_ACTIVE
+from src.db.schema import STATUS_ACTIVE, STATUS_REMOVED
 # ===========================================================================
 
 MEMBER = "member"
@@ -32,7 +32,10 @@ def grant_role(user_id, username, first_name, last_name, role, granted_by,
   """Give a member a role, creating or refreshing their row and making them
   active. False if they already had it. An owner grant outranks a
   leadership one: the owner granting someone who's already an admin through
-  leadership makes it stick even if they later leave the group."""
+  leadership makes it stick even if they later leave the group.
+
+  Also False, changing nothing, for an expelled member: only /reinstate
+  undoes an expulsion. Callers check first to tell the two apart."""
   if role not in ROLES:
     raise ValueError(f"Unknown role: {role}")
   with get_conn() as conn:
@@ -42,6 +45,8 @@ def grant_role(user_id, username, first_name, last_name, role, granted_by,
     member = conn.execute(
       "SELECT status FROM members WHERE user_id = ?", (user_id,)
     ).fetchone()
+    if member is not None and member["status"] == STATUS_REMOVED:
+      return False
     upsert_active(conn, user_id, username, first_name, last_name)
     if member is None or member["status"] != STATUS_ACTIVE:
       conn.execute(

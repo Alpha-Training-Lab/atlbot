@@ -65,14 +65,16 @@ async def cmd_legacy(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(HELP, reply_markup=_picker())
     return
 
-  now, waiting, already, bad = [], [], [], []
+  now, waiting, already, bad, expelled = [], [], [], [], []
   for raw in names:
     key = db.username_key(raw)
     if key is None:
       bad.append(raw)
       continue
     known = db.find_member_by_username(key)
-    if known is not None:
+    if known is not None and db.is_removed(known["user_id"]):
+      expelled.append(f"@{key}")
+    elif known is not None:
       added = db.add_special(known["user_id"], known["username"], known["first_name"],
                              known["last_name"], key, owner)
       (now if added else already).append(f"@{key}")
@@ -90,6 +92,9 @@ async def cmd_legacy(update, context: ContextTypes.DEFAULT_TYPE):
                  "member: " + ", ".join(waiting))
   if already:
     lines.append("Already on the list: " + ", ".join(already))
+  if expelled:
+    lines.append("Removed from ATL, so nothing changed. Use /reinstate first if "
+                 "you want them back: " + ", ".join(expelled))
   if bad:
     lines.append("Not valid usernames: " + ", ".join(bad))
   await update.message.reply_text("\n\n".join(lines))
@@ -100,17 +105,23 @@ async def handle_picked(update, context: ContextTypes.DEFAULT_TYPE):
   their ids directly, so they're linked and active at once."""
   shared = update.effective_message.users_shared
   owner = update.effective_user.id
-  added, already = [], []
+  added, already, expelled = [], [], []
   for u in shared.users:
+    name = f"@{u.username}" if u.username else (u.first_name or "someone")
+    if db.is_removed(u.user_id):
+      expelled.append(name)
+      continue
     key = db.username_key(u.username) if u.username else None
     ok = db.add_special(u.user_id, u.username, u.first_name, u.last_name, key, owner)
-    name = f"@{u.username}" if u.username else (u.first_name or "someone")
     (added if ok else already).append(name)
   lines = []
   if added:
     lines.append("✅ Added as Legacy Members, active now: " + ", ".join(added))
   if already:
     lines.append("Already on the list: " + ", ".join(already))
+  if expelled:
+    lines.append("Removed from ATL, so nothing changed. Use /reinstate first if "
+                 "you want them back: " + ", ".join(expelled))
   await update.effective_message.reply_text(
     "\n\n".join(lines) or "Nobody was picked.", reply_markup=ReplyKeyboardRemove())
   raise ApplicationHandlerStop

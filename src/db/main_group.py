@@ -9,7 +9,8 @@ from src.db.schema import STATUS_ACTIVE
 
 def activate_by_owner(user_id, username, first_name, last_name):
   """The owner added this person to the main group directly: the one
-  sanctioned backdoor. Active whatever their previous status."""
+  sanctioned backdoor. Active whatever their previous status, expelled
+  included: adding them by hand is the owner's explicit choice."""
   with get_conn() as conn:
     member = conn.execute(
       "SELECT status FROM members WHERE user_id = ?", (user_id,)
@@ -18,7 +19,8 @@ def activate_by_owner(user_id, username, first_name, last_name):
     if member is None or member["status"] != STATUS_ACTIVE:
       conn.execute(
         "INSERT INTO member_events (user_id, event, note) VALUES (?, ?, ?)",
-        (user_id, f"status:{STATUS_ACTIVE}", "added to the main group by the owner"),
+        (user_id, f"status:{STATUS_ACTIVE}",
+         f"added to the main group by the owner (was {member['status'] if member else 'new'})"),
       )
 
 

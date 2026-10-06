@@ -453,7 +453,15 @@ can in a private chat with Alpha:
   role, onboarding-lead access or Legacy Member place, so nothing can make
   them active again. Onboarding leads can only expel ordinary members; the
   owner is told whenever a lead expels someone.
-- The owner can undo it with `/reinstate @username`.
+- The owner can undo it with `/reinstate @username`. Someone who was an
+  active member goes back to active; someone expelled mid-onboarding starts
+  onboarding again from the induction group, so a reinstatement never skips
+  induction review, KYC or the vouch. The status before removal is kept in
+  `members.status_before_removal`.
+- `/reinstate` is the only way back. `/admin` and `/legacy` refuse anyone
+  removed (expelled, or banned from the main group) and say to use
+  `/reinstate` first. The one exception: if the owner adds them to the main
+  group by hand, they're active, as with anyone the owner adds directly.
 
 Onboarding leads are a separate permission (`member_managers`), not a role:
 the leadership group makes people admins automatically, and that must never

@@ -8,7 +8,7 @@ from src.db.schema import (
   STATUS_PENDING_SUMMARY, STATUS_REMOVED,
 )
 from src.db.members import (
-  count_events, find_member_by_username, get_member, refresh_telegram_details, log_event, seconds_since_last_event, set_status,
+  count_events, find_member_by_username, get_member, is_removed, refresh_telegram_details, log_event, seconds_since_last_event, set_status,
   upsert_member,
 )
 from src.db.onboarding import (
@@ -70,7 +70,7 @@ __all__ = [
   "get_conn", "init_db", "ALL_STATUSES", "STATUS_ACTIVE",
   "STATUS_AWAITING_DM", "STATUS_DECLINED", "STATUS_KYC_IN_PROGRESS",
   "STATUS_PENDING_ACCESS", "STATUS_PENDING_REVIEW",
-  "STATUS_PENDING_SUMMARY", "STATUS_REMOVED", "count_events", "get_member",
+  "STATUS_PENDING_SUMMARY", "STATUS_REMOVED", "count_events", "get_member", "is_removed",
   "log_event", "seconds_since_last_event", "set_status", "upsert_member",
   "advance_kyc", "bump_kyc_attempts", "create_application",
   "decide_application", "get_application", "get_kyc_answers",

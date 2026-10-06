@@ -74,7 +74,7 @@ def _picker():
     resize_keyboard=True, one_time_keyboard=True)
 
 
-def _summary(made, already, owner_skipped, unknown=(), bad=(), kept=()):
+def _summary(made, already, owner_skipped, unknown=(), bad=(), kept=(), expelled=()):
   lines = []
   if made:
     lines.append("🛡 Now admins: " + ", ".join(made))
@@ -83,6 +83,9 @@ def _summary(made, already, owner_skipped, unknown=(), bad=(), kept=()):
                  "admins even if they leave it: " + ", ".join(kept))
   if already:
     lines.append("Already admins: " + ", ".join(already))
+  if expelled:
+    lines.append("Removed from ATL, so nothing changed. Use /reinstate first if "
+                 "you want them back: " + ", ".join(expelled))
   if owner_skipped:
     lines.append("You're the owner: you already have every permission.")
   if unknown:
@@ -99,7 +102,8 @@ async def cmd_admin(update, context: ContextTypes.DEFAULT_TYPE):
   if not names:
     await update.message.reply_text(HELP, reply_markup=_picker())
     return
-  made, already, kept, unknown, bad, owner_skipped = [], [], [], [], [], False
+  made, already, kept, unknown, bad, expelled = [], [], [], [], [], []
+  owner_skipped = False
   for raw in names:
     key = db.username_key(raw)
     if key is None:
@@ -110,6 +114,8 @@ async def cmd_admin(update, context: ContextTypes.DEFAULT_TYPE):
       unknown.append(f"@{key}")
     elif is_owner(known["user_id"]):
       owner_skipped = True
+    elif db.is_removed(known["user_id"]):
+      expelled.append(f"@{key}")
     else:
       was = db.get_role_source(known["user_id"])
       if db.grant_role(known["user_id"], known["username"], known["first_name"],
@@ -120,17 +126,20 @@ async def cmd_admin(update, context: ContextTypes.DEFAULT_TYPE):
       else:
         already.append(f"@{key}")
   await update.message.reply_text(
-    _summary(made, already, owner_skipped, unknown, bad, kept))
+    _summary(made, already, owner_skipped, unknown, bad, kept, expelled))
 
 
 async def handle_picked(update, context: ContextTypes.DEFAULT_TYPE):
   """Group -1: the owner picked admins. Telegram gives Alpha their ids."""
   owner = update.effective_user.id
-  made, already, kept, owner_skipped = [], [], [], False
+  made, already, kept, expelled, owner_skipped = [], [], [], [], False
   for u in update.effective_message.users_shared.users:
     name = f"@{u.username}" if u.username else (u.first_name or "someone")
     if is_owner(u.user_id):
       owner_skipped = True
+      continue
+    if db.is_removed(u.user_id):
+      expelled.append(name)
       continue
     was = db.get_role_source(u.user_id)
     if db.grant_role(u.user_id, u.username, u.first_name, u.last_name, db.ADMIN, owner):
@@ -140,7 +149,8 @@ async def handle_picked(update, context: ContextTypes.DEFAULT_TYPE):
     else:
       already.append(name)
   await update.effective_message.reply_text(
-    _summary(made, already, owner_skipped, kept=kept), reply_markup=ReplyKeyboardRemove())
+    _summary(made, already, owner_skipped, kept=kept, expelled=expelled),
+    reply_markup=ReplyKeyboardRemove())
   raise ApplicationHandlerStop
 
 

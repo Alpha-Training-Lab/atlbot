@@ -1,6 +1,6 @@
 """Looking members up, expelling and reinstating them, and who may do it."""
 from src.db.connection import get_conn
-from src.db.schema import STATUS_ACTIVE, STATUS_REMOVED
+from src.db.schema import STATUS_ACTIVE, STATUS_PENDING_SUMMARY, STATUS_REMOVED
 # ===========================================================================
 
 
@@ -116,12 +116,14 @@ def expel_member(user_id, actor_user_id, reason):
     if member is None or member["status"] == STATUS_REMOVED:
       return False
     conn.execute(
-      "UPDATE members SET status = ?, updated_at = datetime('now') WHERE user_id = ?",
-      (STATUS_REMOVED, user_id),
+      "UPDATE members SET status = ?, status_before_removal = ?, "
+      "updated_at = datetime('now') WHERE user_id = ?",
+      (STATUS_REMOVED, member["status"], user_id),
     )
     conn.execute(
       "INSERT INTO member_events (user_id, event, actor_user_id, note) VALUES (?, ?, ?, ?)",
-      (user_id, f"status:{STATUS_REMOVED}", actor_user_id, "expelled"),
+      (user_id, f"status:{STATUS_REMOVED}", actor_user_id,
+       f"expelled (was {member['status']})"),
     )
     conn.execute(
       "INSERT INTO member_events (user_id, event, actor_user_id, note) VALUES (?, ?, ?, ?)",
@@ -153,19 +155,36 @@ def expel_member(user_id, actor_user_id, reason):
 
 
 def reinstate_member(user_id, actor_user_id):
-  """Owner's undo: active again. False if they weren't removed."""
+  """Owner's undo. Returns the status they're restored to, or None if they
+  weren't removed.
+
+  Only someone who was an active member goes back to active. Anyone removed
+  mid-onboarding starts onboarding again from the induction group: reinstating
+  must never skip induction review or KYC, and their application, vouch
+  request and review card were all closed when they were expelled, so putting
+  them back mid-flow would leave them stuck.
+
+  status_before_removal is NULL for people removed before it was recorded.
+  Back then the only ways to be removed (a ban noticed in the main group, or
+  Alpha finding them banned) applied to active members only, so NULL means
+  they were active."""
   with get_conn() as conn:
     member = conn.execute(
-      "SELECT status FROM members WHERE user_id = ?", (user_id,)
+      "SELECT status, status_before_removal FROM members WHERE user_id = ?",
+      (user_id,),
     ).fetchone()
     if member is None or member["status"] != STATUS_REMOVED:
-      return False
+      return None
+    was = member["status_before_removal"] or STATUS_ACTIVE
+    restored = STATUS_ACTIVE if was == STATUS_ACTIVE else STATUS_PENDING_SUMMARY
     conn.execute(
-      "UPDATE members SET status = ?, updated_at = datetime('now') WHERE user_id = ?",
-      (STATUS_ACTIVE, user_id),
+      "UPDATE members SET status = ?, status_before_removal = NULL, "
+      "updated_at = datetime('now') WHERE user_id = ?",
+      (restored, user_id),
     )
     conn.execute(
       "INSERT INTO member_events (user_id, event, actor_user_id, note) VALUES (?, ?, ?, ?)",
-      (user_id, f"status:{STATUS_ACTIVE}", actor_user_id, "reinstated by the owner"),
+      (user_id, f"status:{restored}", actor_user_id,
+       f"reinstated by the owner (was {was} before removal)"),
     )
-  return True
+  return restored
