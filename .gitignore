@@ -38,9 +38,10 @@ env/
 *.log
 
 # Tests / debug / non-production scripts
-test_*.py
-*_test.py
-tests/
+# test_*.py
+# *_test.py
+# tests/
 scripts/inspect_data.py
 scripts/inspect_db.py
 scripts/wipe_test_data.py
+scripts/test_gemini.py
