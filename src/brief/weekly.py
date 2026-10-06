@@ -2,14 +2,16 @@
 brief for the week that just ended (Monday to Sunday) and post it in the
 induction group.
 
+Who it's for: people still in induction. It gives them a peek at life
+inside ATL, then shows them how to get in.
+
 Two parts:
   - numbers and names straight from SQLite: nothing an LLM can get wrong;
   - the week's summary, lesson and wins, which Gemini writes from the daily
     digests. Used ONLY if they pass two checks: a pattern check in code,
     then a Gemini compliance check.
-If the Gemini part fails, the brief still goes out without it, and the
-lesson of the week comes from a fixed list (content.py). Nobody approves it
-and nobody is sent a copy.
+If the Gemini part fails, the brief still goes out without it. Nobody
+approves it and nobody is sent a copy.
 
 main.py runs publish_weekly_brief every 10 minutes. It does nothing except
 on Monday between BRIEF_HOUR_UTC and BRIEF_LAST_HOUR_UTC, and brief_weeks
@@ -26,10 +28,10 @@ from telegram.ext import ContextTypes
 
 from src import db
 from src.assistant.llm import brief_passes_check, merge_week
-from src.brief.content import FALLBACK_LESSONS, SAFETY_TIPS, pick_for_week
+from src.brief.content import SAFETY_TIPS, pick_for_week
 from src.brief.digest import digest_finished_days
 from src.config import (BRIEF_HIDE_BELOW, BRIEF_HOUR_UTC, BRIEF_LAST_HOUR_UTC,
-                        BRIEF_MILESTONES, INDUCTION_GROUP_ID)
+                        BRIEF_MILESTONES, INDUCTION_GROUP_ID, INDUCTION_PINNED_URL)
 # ===========================================================================
 logger = logging.getLogger(__name__)
 
@@ -92,11 +94,11 @@ def _numbers(week_start, day_rows):
   messages = sum(per_day.values())
 
   counts = [
-    ("New members welcomed into ATL", growth["new_members"]),
-    ("New faces in the induction group", growth["new_in_induction"]),
-    ("Messages shared across the community", messages),
+    ("New members welcomed into the main group", growth["new_members"]),
+    ("Messages shared in the community", messages),
     ("Members who joined the conversations", len(senders)),
     ("Replies between members", replies),
+    ("New faces here in induction", growth["new_in_induction"]),
   ]
   shown = [f"• {label}: {n:,}" for label, n in counts if n and n >= BRIEF_HIDE_BELOW]
   hidden = [f"{label}: {n}" for label, n in counts if not (n and n >= BRIEF_HIDE_BELOW)]
@@ -167,13 +169,14 @@ async def _gemini_parts(day_rows):
 
 
 # ----- The message -----------------------------------------------------
-async def gather(week_start):
+async def gather(week_start, bot_username=None):
   """Everything the brief needs, Gemini's part included (or None)."""
   day_rows = db.brief_week_days(week_start)
   shown, hidden = _numbers(week_start, day_rows)
   birthday_count, birthday_names = _birthdays(week_start)
   return {
     "week_start": week_start,
+    "bot_username": bot_username,
     "numbers": shown,
     "hidden_numbers": hidden,
     "birthday_count": birthday_count,
@@ -184,26 +187,43 @@ async def gather(week_start):
   }
 
 
+def _how_to_join(bot_username):
+  """The same steps the induction welcome gives. The admins to tag are left
+  out on purpose: finding them is part of reading the material."""
+  read = (f"Read the induction material from the top: {INDUCTION_PINNED_URL}"
+          if INDUCTION_PINNED_URL else
+          "Read the induction material from the top (see the pinned message).")
+  ask = f"@{bot_username}" if bot_username else "Alpha"
+  return ("🚪 WANT TO BE PART OF THIS?\n"
+          "Membership is free and permanent. To join the main group:\n"
+          f"1. {read}\n"
+          "2. When you finish, follow the instructions at the end carefully.\n"
+          "3. An admin reviews you, then Alpha takes you through registration privately.\n"
+          f"Questions while you read? Message {ask}.")
+
+
 def render(stats, use_gemini=True):
-  """The whole brief as plain text. Empty sections are left out."""
+  """The whole brief as plain text, in reading order for someone in
+  induction: what life inside looks like, then how to get in. Empty
+  sections are left out."""
   week_start = stats["week_start"]
   start = date.fromisoformat(week_start)
   end = start + timedelta(days=6)
   gemini = stats["gemini"] if use_gemini else None
   blocks = [
-    "📊 ATL WEEKLY BRIEF\n"
-    f"{start:%a} {_day_label(start)} – {end:%a} {_day_label(end)} {end:%Y}"
+    "👀 A PEEK INSIDE ATL\n"
+    f"What happened in the community, {start:%a} {_day_label(start)} – "
+    f"{end:%a} {_day_label(end)}"
   ]
 
-  if stats["numbers"]:
-    blocks.append("📈 WEEK IN NUMBERS\n" + "\n".join(stats["numbers"]))
-
   if gemini and gemini["summary"]:
-    blocks.append("🗣️ THIS WEEK IN THE COMMUNITY\n" + gemini["summary"])
+    blocks.append("🗣️ THIS WEEK INSIDE ATL\n" + gemini["summary"])
 
-  lesson = (gemini or {}).get("lesson") or pick_for_week(
-    FALLBACK_LESSONS, week_start, salt="lessons")
-  blocks.append("📚 LESSON OF THE WEEK\n" + lesson)
+  if stats["numbers"]:
+    blocks.append("📈 THE WEEK IN NUMBERS\n" + "\n".join(stats["numbers"]))
+
+  if gemini and gemini["lesson"]:
+    blocks.append("📚 LESSON OF THE WEEK\n" + gemini["lesson"])
 
   if gemini and gemini["celebrations"]:
     blocks.append("🏆 WINS & CELEBRATIONS\n"
@@ -216,17 +236,15 @@ def render(stats, use_gemini=True):
       line += ", including " + _and_join(stats["birthday_names"])
     blocks.append(f"🎂 BIRTHDAYS\n{line}. Happy birthday from the whole ATL family!")
 
+  if stats["helpers"]:
+    ranked = "\n".join(f"{i}. {name}" for i, name in enumerate(stats["helpers"], 1))
+    blocks.append("🤝 MEMBERS WHO HELPED OTHERS\n"
+                  f"Their messages got the most replies this week:\n{ranked}")
+
   if stats["milestones"]:
     blocks.append("🎉 MILESTONES\n" + "\n".join(f"• {m}" for m in stats["milestones"]))
 
-  if stats["helpers"]:
-    ranked = "\n".join(f"{i}. {name}" for i, name in enumerate(stats["helpers"], 1))
-    blocks.append("🤝 MOST HELPFUL THIS WEEK\n"
-                  f"Members whose messages got the most replies:\n{ranked}")
-
-  blocks.append("🚪 STILL IN INDUCTION?\n"
-                "Finished the induction material? Follow the pinned message "
-                "to take your next step.")
+  blocks.append(_how_to_join(stats["bot_username"]))
   blocks.append("🛡️ STAY SAFE\n" + pick_for_week(SAFETY_TIPS, week_start, salt="safety"))
   blocks.append("Education only. Not financial advice.\n"
                 "Alpha Training Lab: Your Leverage to the better life you seek.")
@@ -235,7 +253,7 @@ def render(stats, use_gemini=True):
 
 async def build_brief(bot, week_start):
   """(text, used_gemini) for the week."""
-  return compose(await gather(week_start))
+  return compose(await gather(week_start, bot_username=bot.username))
 
 
 def compose(stats):

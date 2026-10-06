@@ -1,7 +1,7 @@
 """Fixed text the weekly brief rotates through. Edit freely: add, remove or
 reword lines; nothing else needs to change.
 
-Each list is shuffled once (the same shuffle every time), then the brief
+The list is shuffled once (the same shuffle every time), then the brief
 takes the next item each week. So the order looks random, and nothing
 repeats until every item has been used.
 """
@@ -33,28 +33,6 @@ SAFETY_TIPS = [
   "withdrawal. That is always a scam.",
   "Keep your phone number, address and ID out of public groups.",
 ]
-
-# Used when the week's chat gives no lesson Gemini can stand behind.
-# Education only: no assets, prices or calls.
-FALLBACK_LESSONS = [
-  "Decide how much you're willing to lose before you enter a trade, not after.",
-  "Keep a trading journal: why you entered, how you felt and what you learned.",
-  "A plan you follow beats a perfect plan you abandon. Discipline is a skill "
-  "you practise.",
-  "Never trade with money you can't afford to lose.",
-  "Learn one strategy well before you add another.",
-  "Losses are part of trading. What matters is that no single loss can take "
-  "you out of the game.",
-  "If you can't explain why you're entering a trade, you're not ready to "
-  "enter it.",
-  "Emotions are information, not instructions. Pause before acting on fear "
-  "or excitement.",
-  "Protecting your capital comes before growing it.",
-  "Review your week: what worked, what didn't, and one thing to improve.",
-  "Practise on a demo account until your process is consistent.",
-  "Ask questions. Every experienced member here was once a beginner.",
-]
-
 
 def pick_for_week(items, week_start, salt):
   """This week's item. salt keeps each list's shuffle different."""

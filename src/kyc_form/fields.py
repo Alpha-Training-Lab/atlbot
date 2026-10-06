@@ -18,6 +18,7 @@ from datetime import datetime
 # No answer counts as No.
 BRIEF_MENTIONS_KEY = "brief_mentions"
 BRIEF_MENTIONS_YES = "Yes, mention me"
+BRIEF_MENTIONS_NO = "No, leave me out"
 
 KYC_FIELDS = [
     {
@@ -137,7 +138,7 @@ KYC_FIELDS = [
                   "group. May we mention you by name in it, for example on your "
                   "birthday or as one of the week's most helpful members?",
         "type": "choice",
-        "options": [BRIEF_MENTIONS_YES, "No, leave me out"],
+        "options": [BRIEF_MENTIONS_YES, BRIEF_MENTIONS_NO],
         "required": True, "active": True, "order": 150,
     },
 ]

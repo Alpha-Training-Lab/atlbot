@@ -115,16 +115,18 @@ At most 5 discussions, 3 lessons and 3 celebrations, each one sentence under 25 
 
 {_BRIEF_RULES}"""
 
-WEEK_INSTRUCTION = f"""You get the daily notes from one week across Alpha Training Lab's groups. Write parts of the weekly community newsletter from them.
+WEEK_INSTRUCTION = f"""You get the daily notes from one week across Alpha Training Lab's (ATL) groups. From them you write parts of a weekly brief posted in ATL's induction group.
+
+Who reads it: people still in induction who have not joined the main community yet. The brief is their peek inside, so they can see what they will be part of and feel encouraged to finish induction.
 
 Return JSON only, exactly this shape:
 {{"summary": "", "lesson": "", "celebrations": []}}
 
-summary: 3 to 4 warm, plain sentences giving an overall picture of what the community discussed and did this week.
-lesson: the single most useful educational takeaway of the week, in one sentence under 30 words. Empty string if there is none.
-celebrations: at most 3 personal wins, each one sentence under 25 words.
+summary: 3 to 4 sentences giving a vivid, specific picture of life inside the community this week: what members learned, discussed and did, and how they helped each other. Warm and inviting, written to someone looking in from outside. Show, don't sell: no hype, no exaggeration, no telling the reader what to do.
+lesson: the single most useful educational takeaway members shared this week, in one sentence under 30 words. Empty string if there is no clear one.
+celebrations: at most 3 personal wins members shared, each one sentence under 25 words.
 
-Never add anything that isn't in the notes.
+Never add anything that isn't in the notes. Never suggest that joining leads to profits or returns.
 
 {_BRIEF_RULES}"""
 

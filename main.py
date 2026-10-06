@@ -22,6 +22,7 @@ from telegram.ext import (
 from src import commands, db
 from src.assistant.chat import handle_alpha_message
 from src.brief import capture as brief_capture
+from src.brief import mentions as brief_mentions
 from src.brief.digest import digest_finished_days
 from src.brief.weekly import publish_weekly_brief
 from src.common.cleanup import sweep_deletions
@@ -135,6 +136,14 @@ def build_app() -> Application:
   app.add_handler(CommandHandler("admin", roles.cmd_admin, filters=owner_dm), group=0)
   app.add_handler(CommandHandler("admins", roles.cmd_admins, filters=owner_dm), group=0)
   app.add_handler(CommandHandler("unadmin", roles.cmd_unadmin, filters=owner_dm), group=0)
+  app.add_handler(CommandHandler("askmentions", brief_mentions.cmd_ask_mentions,
+                                 filters=owner_dm), group=0)
+
+  # ----- group 0: may the weekly brief name you? (brief/mentions.py) ----
+  app.add_handler(CommandHandler("mentions", brief_mentions.show_choice,
+                                 filters=filters.ChatType.PRIVATE), group=0)
+  app.add_handler(
+    CallbackQueryHandler(brief_mentions.handle_choice, pattern=r"^bm:"), group=0)
 
   # ----- group 0: the leadership group makes admins (members/roles.py) ----
   app.add_handler(

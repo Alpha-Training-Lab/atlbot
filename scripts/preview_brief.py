@@ -119,7 +119,7 @@ async def run(args):
     await digest_finished_days()
 
   async with Bot(BOT_TOKEN) as bot:
-    stats = await gather(args.week)
+    stats = await gather(args.week, bot_username=bot.username)
     text, used_gemini = compose(stats)
     label = ("🧪 PREVIEW, not posted anywhere\n"
              f"Week of {args.week} · {'sample data added' if args.sample else 'real data only'}"

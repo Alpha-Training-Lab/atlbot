@@ -430,8 +430,9 @@ private alert about an unauthorised join.
 ### Weekly brief (`src/brief/`)
 
 Every Monday from 09:00 UTC Alpha posts a community brief in the induction
-group. It is fully autonomous: nobody writes highlights, approves it or gets
-a copy.
+group. It is written for people still in induction: a peek at life inside
+ATL, ending with how to join the main group. It is fully autonomous: nobody
+writes highlights, approves it or gets a copy.
 
 1. **Capture** (`capture.py`, handler group -3, before everything else and
    never stopping an update): text messages from the groups the brief reads
@@ -449,9 +450,9 @@ a copy.
    is left out), birthdays, milestones, most helpful. From Gemini: a summary
    of the week's discussions, the lesson of the week and members' wins, used
    only if they pass a pattern check in code and then a Gemini compliance
-   check. Without them, the lesson comes from a fixed list. The safety tip
-   rotates through a fixed list. Both lists are in `content.py`, shuffled
-   once and taken one per week, so nothing repeats until all are used.
+   check; otherwise those sections are left out. The safety tip rotates
+   through the list in `content.py`, shuffled once and taken one per week,
+   so nothing repeats until all are used.
    `brief_weeks` makes sure the brief is sent once, and the week's data is
    deleted once it is.
 
@@ -463,9 +464,11 @@ birthday, HBD or many happy returns records who it @mentions, and no text is
 stored.
 
 **Who is named:** only active members who answered "Yes, mention me" to the
-"Weekly brief" question (last KYC question; existing members can set it with
-/profile). No answer counts as No. Everyone celebrated is counted; only they
-are named. Gemini's part never names anyone.
+"Weekly brief" question. New members answer it at the end of registration;
+anyone can answer or change it with `/mentions` (or under `/profile`), and
+the owner's `/askmentions` posts an invite with a button in the main group
+(`brief/mentions.py`). No answer counts as No. Everyone celebrated is
+counted; only they are named. Gemini's part never names anyone.
 
 **Retention:** raw messages until their day is digested (normally just after
 midnight UTC), digests until the brief is sent, nothing past
@@ -530,7 +533,8 @@ atlbot/
 │   │   ├── capture.py          # Store group messages; track groups Alpha joins
 │   │   ├── digest.py           # Daily counts + Gemini digest, then delete messages
 │   │   ├── weekly.py           # Monday: build, check and post the brief
-│   │   └── content.py          # Safety tips and fallback lessons (edit freely)
+│   │   ├── mentions.py         # /mentions: may the brief name you?
+│   │   └── content.py          # Safety tips (edit freely)
 │   │
 │   ├── kyc_form/               # The KYC questions, shared by onboarding, members and the import
 │   │   ├── fields.py           # The question list, labels, display formatting
@@ -680,6 +684,8 @@ photos by reference) and is gitignored. It must never be committed.
 | `/profile` | Show your profile, with buttons to fill in or edit details. |
 | `/kyc` | Enter registration without the deep link. Marked TEMPORARY. |
 | `/chatid` | Replies with the current chat's ID, for filling in `.env`. |
+| `/mentions` | In a DM: choose whether the weekly brief may name you. |
+| `/askmentions` | Owner only, in a DM: post the "may we name you?" invite in the main group. |
 
 ## Scripts
 
