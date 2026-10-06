@@ -14,6 +14,12 @@ together. Registration, filling missing details and editing all use it.
 """
 from datetime import datetime
 
+# The weekly brief (src/brief/) names a member only if they answered Yes.
+# No answer counts as No.
+BRIEF_MENTIONS_KEY = "brief_mentions"
+BRIEF_MENTIONS_YES = "Yes, mention me"
+BRIEF_MENTIONS_NO = "No, leave me out"
+
 KYC_FIELDS = [
     {
         "key": "full_name",
@@ -124,6 +130,16 @@ KYC_FIELDS = [
         "prompt": "Now upload a photo of yourself holding that same ID.",
         "type": "document",
         "required": True, "active": True, "order": 140,
+    },
+    {
+        "key": BRIEF_MENTIONS_KEY,
+        "label": "Weekly brief", "edit": "self",
+        "prompt": "Every Monday Alpha posts a community brief in the induction "
+                  "group. May we mention you by name in it, for example on your "
+                  "birthday or as one of the week's most helpful members?",
+        "type": "choice",
+        "options": [BRIEF_MENTIONS_YES, BRIEF_MENTIONS_NO],
+        "required": True, "active": True, "order": 150,
     },
 ]
 

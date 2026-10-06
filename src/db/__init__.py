@@ -50,6 +50,15 @@ from src.db.roles import (
   ADMIN, FROM_LEADERSHIP, FROM_OWNER, MEMBER, ROLES, get_role, get_role_source,
   grant_role, members_with_role, revoke_role,
 )
+from src.db.brief import (
+  brief_day_exists, brief_group_enabled, brief_growth_counts,
+  brief_messages_for_day, brief_week_days, claim_brief_week,
+  ensure_brief_group, finish_brief_week, finished_brief_days,
+  mentionable_members, purge_brief_data,
+  release_brief_week, remove_brief_group, save_birthdays, save_brief_day,
+  save_brief_message, set_brief_group, user_ids_for_usernames,
+  week_celebrants,
+)
 
 __all__ = [
   "get_conn", "init_db", "ALL_STATUSES", "STATUS_ACTIVE",
@@ -80,4 +89,11 @@ __all__ = [
   "list_specials", "remove_special", "pop_reason_prompt", "save_reason_prompt", "set_vouch_contact", "username_on_record", "refresh_telegram_details",
   "end_edit_session_if_idle", "end_profile_session_if_idle",
   "idle_edit_sessions", "idle_profile_sessions",
+  "brief_day_exists", "brief_group_enabled", "brief_growth_counts",
+  "brief_messages_for_day", "brief_week_days", "claim_brief_week",
+  "ensure_brief_group", "finish_brief_week", "finished_brief_days",
+  "mentionable_members", "purge_brief_data", "user_ids_for_usernames",
+  "release_brief_week", "remove_brief_group", "save_birthdays",
+  "save_brief_day", "save_brief_message", "set_brief_group",
+  "week_celebrants",
 ]

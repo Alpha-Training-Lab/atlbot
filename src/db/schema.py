@@ -238,4 +238,65 @@ CREATE TABLE IF NOT EXISTS member_roles (
     granted_by INTEGER,
     granted_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ----- Weekly brief (src/brief/) ---------------------------------------
+-- Groups Alpha is in. Only enabled groups have their messages stored.
+-- config.BRIEF_NEVER_READ (leadership, onboarding, induction) is never
+-- read, whatever this table says.
+CREATE TABLE IF NOT EXISTS brief_groups (
+    chat_id  INTEGER PRIMARY KEY,
+    enabled  INTEGER NOT NULL DEFAULT 0,
+    added_by INTEGER,
+    added_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Raw group messages. Deleted as soon as their day has been digested.
+CREATE TABLE IF NOT EXISTS brief_messages (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id          INTEGER NOT NULL,
+    message_id       INTEGER NOT NULL,
+    user_id          INTEGER NOT NULL,
+    reply_to_user_id INTEGER,      -- NULL unless it counts toward "most helpful"
+    text             TEXT NOT NULL,
+    sent_at          TEXT NOT NULL, -- UTC, 'YYYY-MM-DD HH:MM:SS'
+    UNIQUE(chat_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_brief_messages_sent
+  ON brief_messages(sent_at);
+
+-- One row per group per finished UTC day: counts, plus Gemini's digest
+-- (NULL if Gemini kept failing). Deleted once that week's brief is sent.
+-- replies_json maps user_id to the number of replies their messages got;
+-- senders_json lists who posted that day.
+CREATE TABLE IF NOT EXISTS brief_days (
+    day           TEXT NOT NULL,   -- 'YYYY-MM-DD', UTC
+    chat_id       INTEGER NOT NULL,
+    message_count INTEGER NOT NULL,
+    replies_json  TEXT NOT NULL,
+    senders_json  TEXT NOT NULL DEFAULT '[]',
+    digest_json   TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (day, chat_id)
+);
+
+-- People wished a happy birthday in the felicitation group, taken from the
+-- @mentions in those messages. No message text is stored. celebrant is
+-- 'id:<telegram id>' or 'u:<username, lowercase>'. Deleted with the week.
+CREATE TABLE IF NOT EXISTS brief_birthdays (
+    day       TEXT NOT NULL,       -- 'YYYY-MM-DD', UTC
+    celebrant TEXT NOT NULL,
+    PRIMARY KEY (day, celebrant)
+);
+
+-- One row per weekly brief, so a restart can never post one twice.
+-- week_start is the Monday the reported week began.
+CREATE TABLE IF NOT EXISTS brief_weeks (
+    week_start TEXT PRIMARY KEY,
+    status     TEXT NOT NULL CHECK (status IN ('sending', 'sent')),
+    used_llm   INTEGER NOT NULL DEFAULT 0,
+    message_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    sent_at    TEXT
+);
 """

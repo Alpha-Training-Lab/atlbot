@@ -14,6 +14,14 @@ member journey end to end:
   complete and edit their profile, with admin approval for identity details.
 - **Answering questions:** a Gemini-backed assistant for anything else
   members ask in a DM.
+- **The weekly brief:** every Monday, an autonomous community newsletter in
+  the induction group, built from the week's activity and checked for
+  anything that looks like financial advice before it is posted.
+- **Owner tools:** a hand-picked list of Legacy Members, and admin roles
+  (granted by the owner, or automatically for the leadership group).
+
+Every push to `main` is linted and tested, then deployed to the production
+server if the tests pass (see [Tests, CI and deployment](#tests-ci-and-deployment)).
 
 This document describes the system **as the code currently behaves**.
 
@@ -25,11 +33,17 @@ This document describes the system **as the code currently behaves**.
   - [Onboarding](#onboarding-srconboarding)
   - [Existing members](#existing-members-srcmembers)
   - [Alpha, the assistant](#alpha-the-assistant-srcassistant)
+  - [Legacy Members](#legacy-members-the-owners-special-list-membersspecialpy)
+  - [Roles](#roles-membersrolespy)
+  - [What admins see](#what-admins-see)
+  - [Weekly brief](#weekly-brief-srcbrief)
+  - [Repeating jobs](#repeating-jobs)
   - [Scheduled message cleanup](#scheduled-message-cleanup-srccommoncleanuppy)
 - [Project structure](#project-structure)
 - [Getting started](#getting-started)
 - [Environment variables](#environment-variables)
 - [Running the bot](#running-the-bot)
+- [Tests, CI and deployment](#tests-ci-and-deployment)
 - [Database](#database)
 - [Bot commands](#bot-commands)
 - [Scripts](#scripts)
@@ -44,13 +58,13 @@ and they all share one data layer:
 ```
                         main.py  (wires every handler, in priority order)
                            │
-        ┌──────────────────┼───────────────────────┐
-        ▼                  ▼                       ▼
-  src/onboarding/     src/members/           src/assistant/
-  new members         existing members       Alpha, the LLM
-        │                  │                       │
-        └──────┬───────────┴───────────┬───────────┘
-               ▼                       ▼
+        ┌──────────────────┼────────────────────┬──────────────────┐
+        ▼                  ▼                    ▼                  ▼
+  src/onboarding/     src/members/        src/assistant/      src/brief/
+  new members         existing members    Alpha, the LLM      weekly brief
+        │                  │                    │                  │
+        └──────┬───────────┴────────────┬───────┴──────────────────┘
+               ▼                        ▼
          src/kyc_form/            src/common/
          questions +              Telegram helpers,
          validation               cleanup job
@@ -69,20 +83,28 @@ sideways links:
   the "membership removed" message.
 - `assistant/chat.py` uses `members/` to keep the main group in step before
   answering.
+- `brief/` uses `members/roles.py` to decide whether a group Alpha was added
+  to was added by an admin, and `assistant/llm.py` for its Gemini calls.
+  `commands.py` uses `brief/mentions.py` for the `?start=mentions` deep link.
 
-`members/` never imports `onboarding/` or `assistant/`.
+`members/` never imports `onboarding/`, `assistant/` or `brief/`.
 
 **Who gets a message first.** `main.py` registers every handler. Telegram
-updates pass through handler groups in order: −1, then 0, then 1. Within a
+updates pass through handler groups in order: −3, −2, −1, 0, then 1. Within a
 group, only the first matching handler runs, and a handler can stop an update
 from reaching later groups. So the order in `main.py` is the bot's priority
 list:
 
 | Group | Handler | Claims |
 |------:|---------|--------|
+| −3 | `brief/capture.py` | Felicitation-group posts (birthdays only), text posted in the groups the brief reads, and Alpha being added to or leaving a group. Never stops an update, so everything below still sees it |
 | −2 | `members/vouch.py` | A DM from someone's named vouch: their "Hi" is how Alpha learns who they are, so it asks them first (stopped there only when it asks) |
+| −1 | `members/special.py`, `members/roles.py` | The owner's user-picker answers (Legacy Members, admins), so nothing else treats them as a message |
 | −1 | `members/legacy.py` | Shared phone numbers and Skip taps from the link flow (stopped there, so they never reach KYC or the LLM); silent username matching on main-group posts and DMs |
 | 0 | `src/commands.py`, `members/profile.py` | `/start`, `/profile`, `/kyc`, `/chatid` |
+| 0 | `members/special.py`, `members/roles.py`, `brief/mentions.py` | Owner-only commands in a DM: `/legacy`, `/legacylist`, `/legacyremove`, `/admin`, `/admins`, `/unadmin`, `/askmentions` |
+| 0 | `brief/mentions.py` | `/mentions` and its buttons (`bm:`) |
+| 0 | `members/roles.py` | Posts, joins and leaves in the leadership group |
 | 0 | `onboarding/induction.py` | Everything in the induction group |
 | 0 | `members/profile.py`, `members/profile_edit.py` | DMs from a member part-way through filling in or editing their profile |
 | 0 | `onboarding/kyc.py` | DMs from a member part-way through registration |
@@ -427,10 +449,63 @@ internally (for example, an "Other" decline prompt is matched through the
 `reason_prompts` table, not its wording). The one exception is the owner's
 private alert about an unauthorised join.
 
+### Weekly brief (`src/brief/`)
+
+Every Monday from 09:00 UTC Alpha posts a community brief in the induction
+group. It is written for people still in induction: a peek at life inside
+ATL, ending with how to join the main group. It is fully autonomous: nobody
+writes highlights, approves it or gets a copy.
+
+1. **Capture** (`capture.py`, handler group -3, before everything else and
+   never stopping an update): text messages from the groups the brief reads
+   go into `brief_messages`. Not commands, edits, bots or anonymous admins.
+   A reply counts toward "most helpful" unless it's to a bot or to themselves.
+2. **Digest** (`digest.py`, hourly job, but only days that have ended): each
+   group's day becomes counts plus a short Gemini digest in `brief_days`, and
+   that day's messages are deleted in the same transaction. Gemini sees text
+   only, never who wrote it. If Gemini fails the day is retried; after
+   `BRIEF_DIGEST_GIVE_UP_DAYS` it is saved without a digest and the messages
+   are deleted anyway.
+3. **Brief** (`weekly.py`, every 10 minutes, acts only on Monday between
+   `BRIEF_HOUR_UTC` and `BRIEF_LAST_HOUR_UTC`). From SQLite: week in numbers
+   (this week's activity only, never totals; a count below `BRIEF_HIDE_BELOW`
+   is left out), birthdays, milestones, most helpful. From Gemini: a summary
+   of the week's discussions, the lesson of the week, members' wins and
+   "Coming up this week" (events announced in the chat, with dates Gemini
+   works out from the posting day; code keeps only dates in the week ahead
+   that were actually announced), used
+   only if they pass a pattern check in code and then a Gemini compliance
+   check; otherwise those sections are left out. The safety tip rotates
+   through the list in `content.py`, shuffled once and taken one per week,
+   so nothing repeats until all are used.
+   `brief_weeks` makes sure the brief is sent once, and the week's data is
+   deleted once it is.
+
+**Which groups:** the main group from the start; any group Alpha is added to
+later if the owner or an admin added it. Never the leadership, onboarding or
+induction group (`config.BRIEF_NEVER_READ`). The felicitation group
+(`FELICITATION_GROUP_ID`) is read for birthdays only: a post saying happy
+birthday, HBD or many happy returns records who it @mentions, and no text is
+stored.
+
+**Who is named:** only active members who answered "Yes, mention me" to the
+"Weekly brief" question. New members answer it at the end of registration;
+anyone can answer or change it with `/mentions` (or under `/profile`), and
+the owner's `/askmentions` posts an invite with a button in the main group
+(`brief/mentions.py`). No answer counts as No. Everyone celebrated is
+counted; only they are named. Gemini's part never names anyone.
+
+**Retention:** raw messages until their day is digested (normally just after
+midnight UTC), digests until the brief is sent, nothing past
+`BRIEF_KEEP_DAYS`. Database backups taken in between will contain them.
+
 ### Repeating jobs
 
 `members/vouch.sweep` runs every 30 minutes: reminders and expiry for
 vouch requests (above).
+
+`brief/digest.digest_finished_days` runs every hour and
+`brief/weekly.publish_weekly_brief` every 10 minutes (Weekly brief, above).
 
 `members/profile.sweep_idle_sessions` and
 `members/profile_edit.sweep_idle_sessions` run every 5 minutes and close
@@ -452,8 +527,13 @@ and runs without the job.
 ```
 atlbot/
 ├── main.py                     # Entry point: registers every handler in priority order, runs the bot
-├── requirements.txt
+├── requirements.txt            # What the bot needs to run
+├── requirements-dev.txt        # requirements.txt plus ruff and pytest, for tests and CI
 ├── .env.example                # Every setting, with placeholders
+│
+├── .github/workflows/ci.yml    # CI/CD: lint, compile, test; deploy to EC2 on pushes to main
+├── tests/                      # pytest suite, run by CI on every PR and push to main
+│   └── test_validators.py      # Every KYC answer validator, valid and invalid
 │
 ├── src/
 │   ├── config.py               # Settings from .env
@@ -477,7 +557,14 @@ atlbot/
 │   ├── assistant/              # Alpha, the LLM
 │   │   ├── chat.py             # DM catch-all
 │   │   ├── context.py          # What Alpha is told about the member's status
-│   │   └── llm.py              # Gemini client
+│   │   └── llm.py              # Gemini client (chat, induction intent, weekly brief)
+│   │
+│   ├── brief/                  # The weekly community brief
+│   │   ├── capture.py          # Store group messages; track groups Alpha joins
+│   │   ├── digest.py           # Daily counts + Gemini digest, then delete messages
+│   │   ├── weekly.py           # Monday: build, check and post the brief
+│   │   ├── mentions.py         # /mentions: may the brief name you?
+│   │   └── content.py          # Safety tips (edit freely)
 │   │
 │   ├── kyc_form/               # The KYC questions, shared by onboarding, members and the import
 │   │   ├── fields.py           # The question list, labels, display formatting
@@ -496,7 +583,11 @@ atlbot/
 │       ├── deletions.py        # Scheduled deletions
 │       ├── legacy.py           # Old-website records, matching keys, linking
 │       ├── profile.py          # Profile sessions, edit sessions, approvals
-│       └── main_group.py       # Owner-added members, invites, in-group nudges
+│       ├── main_group.py       # Owner-added members, invites, in-group nudges
+│       ├── vouch.py            # Vouch requests, reminders, outcomes
+│       ├── special.py          # The owner's Legacy Members list
+│       ├── roles.py            # Member roles and where each came from
+│       └── brief.py            # Weekly brief: groups, messages, digests, weeks
 │
 ├── resources/                  # Read by src/assistant/llm.py at startup
 │   ├── prompts/alpha_persona.md
@@ -506,6 +597,8 @@ atlbot/
 │   ├── import_legacy.py        # One-time import of the old website's spreadsheet
 │   ├── backup_db.py            # Nightly backup to S3
 │   ├── stats.py                # Read-only snapshot, counts only
+│   ├── first_completers.py     # Read-only: who finished updating their records first
+│   ├── preview_brief.py        # Build this week's brief on a copy of the db, send it to the owner
 │   └── list_model.py           # List Gemini models for the API key
 │
 ├── data/                       # gitignored: local exports and backups
@@ -516,7 +609,8 @@ atlbot/
 
 ## Getting started
 
-**Prerequisites:** Python 3.11+, a Telegram bot token, and a Gemini API key.
+**Prerequisites:** Python 3.14 (the server and CI run 3.14.4), a Telegram
+bot token, and a Gemini API key.
 
 ```bash
 git clone https://github.com/Alpha-Training-Lab/atlbot.git
@@ -525,12 +619,12 @@ cd atlbot
 python3 -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 
-pip install -r requirements.txt
+pip install -r requirements.txt       # or requirements-dev.txt to run the tests
 
 cp .env.example .env           # then fill in real values — see below
 ```
 
-Alpha needs admin rights in three groups:
+Alpha needs admin rights in these groups:
 
 - **Main group** (`MAIN_GROUP_ID`): *Invite users via link* to create invite
   links, and *Ban users* to remove people who skipped onboarding. Being an
@@ -538,7 +632,11 @@ Alpha needs admin rights in three groups:
 - **Onboarding group** (`ONBOARDING_GROUP_ID`): post review cards and read
   admins' replies.
 - **Induction group** (`INDUCTION_GROUP_ID`): read every message and delete
-  messages.
+  messages. The weekly brief is posted here.
+- **Leadership group** (`LEADERSHIP_GROUP_ID`, optional): to see joins and
+  leaves, so its members are made admins automatically.
+- **Felicitation group** (`FELICITATION_GROUP_ID`, optional): to read the
+  birthday wishes the weekly brief celebrates.
 
 ## Environment variables
 
@@ -559,13 +657,31 @@ chat ID, add the bot to the group and send `/chatid` there.
 | `MIN_INDUCTION_SECONDS` | Optional | 10 days | Minimum time in the induction group before a post is accepted. |
 | `ATL_DB_PATH` | Optional | `<project root>/atl_bot.db` | Where the SQLite file lives; `~` is expanded. |
 | `LEADERSHIP_GROUP_ID` | No | 0 | Members of this group are automatically admins. Alpha must be an admin there. |
+| `FELICITATION_GROUP_ID` | For brief birthdays | 0 | Where birthdays are celebrated; the weekly brief reads it for birthdays only. Alpha must be an admin there. Unset = no birthdays in the brief. |
 | `ATL_BACKUP_BUCKET` | For backups | — | S3 bucket used by `scripts/backup_db.py`. |
 
 Blank values are treated as unset. These are fixed in `src/config.py` rather
-than read from the environment: `MAX_DECLINES` (3), `COOLDOWN_SECONDS` (6h),
-`INVITE_TTL_SECONDS` (48h), `WELCOME_DELETE_SECONDS` (24h),
-`REMINDER_DELETE_SECONDS` (3h), `REGISTRATION_PROMPT_DELETE_SECONDS` (24h),
-`PROFILE_SESSION_IDLE_SECONDS` (60 minutes).
+than read from the environment:
+
+| Setting | Value | What it controls |
+|---------|-------|------------------|
+| `MAX_DECLINES` | 3 | Declines before each new attempt has to wait `COOLDOWN_SECONDS`. |
+| `COOLDOWN_SECONDS` | 6h | The wait between attempts after `MAX_DECLINES`. |
+| `INVITE_TTL_SECONDS` | 48h | Lifetime of a main-group invite link. |
+| `WELCOME_DELETE_SECONDS` | 24h | Induction welcome message lifetime. |
+| `REMINDER_DELETE_SECONDS` | 3h | Induction status replies, and the post they answer. |
+| `REGISTRATION_PROMPT_DELETE_SECONDS` | 24h | "Start registration" post, if never tapped. |
+| `PROFILE_SESSION_IDLE_SECONDS` | 60 minutes | A quiet fill or edit session is closed. |
+| `VOUCH_REMIND_SECONDS` | 12h | How often a silent vouch is reminded. |
+| `VOUCH_EXPIRE_SECONDS` | 72h | Vouch silence this long counts as No. |
+| `VOUCH_TAG_DELETE_SECONDS` | 6h | Main-group "send me Hi" tag lifetime. |
+| `BRIEF_HOUR_UTC`, `BRIEF_LAST_HOUR_UTC` | 9, 21 | The Monday window the weekly brief is posted in. |
+| `BRIEF_HIDE_BELOW` | 10 | Week-in-numbers counts below this are left out (0 shows all). |
+| `BRIEF_DIGEST_GIVE_UP_DAYS` | 2 | A day whose Gemini digest keeps failing is saved without one. |
+| `BRIEF_DIGEST_MAX_CHARS` | 60,000 | Most text from one group's day sent to Gemini (newest kept). |
+| `BRIEF_KEEP_DAYS` | 14 | Nothing the brief stores outlives this. |
+| `BRIEF_MILESTONES` | ATL Men's Forum, 2020-07-20 | Anniversaries the brief celebrates. |
+| `BRIEF_NEVER_READ` | Leadership, onboarding, induction, felicitation | Groups whose text is never stored or sent to Gemini. |
 
 ## Running the bot
 
@@ -573,14 +689,58 @@ than read from the environment: `MAX_DECLINES` (3), `COOLDOWN_SECONDS` (6h),
 python main.py
 ```
 
-This creates any missing tables (`db.init_db()`), registers the cleanup job
-and every handler, and starts long-polling with
+This creates any missing tables (`db.init_db()`), registers the repeating
+jobs and every handler, and starts long-polling with
 `allowed_updates=Update.ALL_TYPES`, so joins, leaves and join requests are
 delivered too. On the server it runs as the `atlbot` systemd service.
 
 Only run **one** instance per `BOT_TOKEN`: Telegram rejects a second
 `getUpdates` with a `Conflict` error. Don't start the bot locally with the
 production token while the server is running.
+
+On startup it also records the main group as a group the weekly brief reads
+(`brief_capture.seed_groups`), once; later changes to that row are kept.
+
+## Tests, CI and deployment
+
+**Run the checks locally** exactly as CI does, from the project root with
+`requirements-dev.txt` installed:
+
+```bash
+ruff check . --select E4,E7,E9,F    # syntax errors, undefined names, unused imports
+python -m compileall -q .
+python -m pytest tests
+```
+
+Run pytest on `tests` only: `scripts/test_gemini.py` (gitignored) calls the
+Gemini API as soon as it is imported, so a bare `pytest` would collect it and
+make a real API call. The suite needs no `.env`, database or network today:
+`tests/test_validators.py` covers every validator in
+`src/kyc_form/validators.py` (text, email, phone, day-month, choice) and the
+`validate()` dispatcher. New test files go in `tests/` as `test_*.py`.
+
+**CI/CD** (`.github/workflows/ci.yml`) has two jobs:
+
+1. **test** runs on every pull request and every push to `main`: install
+   `requirements-dev.txt` on Python 3.14.4 (kept the same as the server),
+   then ruff, compileall and pytest as above.
+2. **deploy** runs only on pushes to `main`, only after **test** passes, and
+   one at a time (concurrency group `production`; a running deploy is never
+   cancelled). Pull requests are tested but never deployed.
+
+**Merging a pull request into `main`, or pushing to it, deploys to
+production.** The deploy job SSHes to the EC2 server as `ubuntu`, using three
+repository secrets:
+
+| Secret | Holds |
+|--------|-------|
+| `DEPLOY_SSH_KEY` | Private key for the deploy login. Written to the runner for the job and deleted afterwards, even if the job fails. |
+| `EC2_HOST` | The server's address. |
+| `EC2_KNOWN_HOSTS` | The server's host key. SSH runs with `StrictHostKeyChecking=yes`, so a server that doesn't match is refused. |
+
+The workflow sends no command: what the deploy login does (update the code,
+restart the `atlbot` service) is set on the server, for that key, not in this
+repository. The workflow's GitHub token is read-only (`contents: read`).
 
 ## Database
 
@@ -608,6 +768,11 @@ never half-applies.
 | `reason_prompts` | Which member an admin's "Other" decline prompt is about, so the prompt text needn't show their id. |
 | `special_members` | The owner's Legacy Members: linked by Telegram id, or waiting by username until first seen. |
 | `member_roles` | Roles beyond ordinary member (today: admin), and where each came from: the owner (`/admin`) or the leadership group. No row = ordinary member. |
+| `brief_groups` | Groups Alpha is in, and whether the weekly brief reads them. |
+| `brief_messages` | Group messages waiting to be digested. Deleted once their day is. |
+| `brief_days` | Per group per day: message count, who posted, replies received per member, Gemini's digest. Deleted once the week's brief is sent. |
+| `brief_birthdays` | Who was wished a happy birthday in the felicitation group, and when. Deleted once the week's brief is sent. |
+| `brief_weeks` | One row per weekly brief, so it is never sent twice. |
 
 The database holds real member PII (names, phone numbers, addresses, ID
 photos by reference) and is gitignored. It must never be committed.
@@ -616,10 +781,24 @@ photos by reference) and is gitignored. It must never be committed.
 
 | Command | Description |
 |---------|-------------|
-| `/start` | Deep-link entry point: `?start=kyc` begins or resumes registration, `?start=link` is the "I'm already an ATL member" flow. With no payload, an active member sees their profile. |
+| `/start` | Deep-link entry point: `?start=kyc` begins or resumes registration, `?start=link` is the "I'm already an ATL member" flow, `?start=vouch` is a named vouch arriving from their main-group tag, and `?start=mentions` opens the weekly-brief naming choice. With no payload, an active member sees their profile. |
 | `/profile` | Show your profile, with buttons to fill in or edit details. |
 | `/kyc` | Enter registration without the deep link. Marked TEMPORARY. |
 | `/chatid` | Replies with the current chat's ID, for filling in `.env`. |
+| `/mentions` | In a DM: choose whether the weekly brief may name you. |
+
+Owner only (`OWNER_USER_ID`), in a private chat with Alpha. The commands
+are ignored for anyone else:
+
+| Command | Description |
+|---------|-------------|
+| `/legacy` | Show the **Pick Legacy Members** button; `/legacy @name …` adds by username. |
+| `/legacylist` | Who's on the Legacy Members list, and who's still waiting to be seen. |
+| `/legacyremove @name` | Take someone off the list. Their membership stays. |
+| `/admin` | Show the **Pick admins** button; `/admin @name` for people already on record. |
+| `/admins` | List the admins and where each role came from. |
+| `/unadmin @name` | Make someone an ordinary member again (not for leadership-group admins). |
+| `/askmentions` | Post the "may we name you?" invite, with a button, in the main group. |
 
 ## Scripts
 
@@ -634,6 +813,17 @@ Standalone tools in `scripts/`, run from the project root with the venv:
 - `list_model.py`: list the Gemini models available to the API key.
 - `stats.py`: a read-only snapshot (members, backlog, admin queue, vouches).
   Counts only, never anyone's details, so its output is safe to share.
+- `first_completers.py [--top N] [--since YYYY-MM-DD] [--names-only]
+  [--approved-only] [--include-vouch]`: read-only ranking of active members
+  by when their last required detail went in, counting profile updates made
+  through Alpha since `--since`. A detail counts once saved, approved or
+  submitted for approval (`--approved-only`: approved only), and the vouch
+  isn't required unless `--include-vouch`. Prints @username or name, never
+  Telegram ids; `--names-only` gives a list ready to paste.
+- `preview_brief.py --db <live db> [--sample] [--week YYYY-MM-DD] [--no-send]`:
+  builds the weekly brief exactly as Monday's job would (real Gemini calls),
+  on a throwaway copy of the database, and sends it to the owner's DM only.
+  `--sample` adds made-up chat and members so every section shows.
 
 `inspect_db.py`, `inspect_data.py`, `wipe_test_data.py` and `test_gemini.py`
 are local-only and gitignored. `inspect_data.py` prints PII; never share its
@@ -667,4 +857,9 @@ approval; anything else needs an admin.
   are deliberately not matched against the spreadsheet by username: anyone
   can take over a username a member has since dropped, and linking would hand
   them that member's record.
-- **No automated test suite.** Verification is manual plus static checks.
+- **Tests cover the KYC validators only.** Handlers, the database layer and
+  the weekly brief are checked by hand, by ruff and compileall in CI, and for
+  the brief by `scripts/preview_brief.py`.
+- **Deploys can't be checked from this repository.** What the deploy login
+  does is configured on the server, so a green deploy job means the SSH login
+  succeeded, not that the new code is running. Check the bot after a merge.

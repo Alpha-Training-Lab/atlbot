@@ -48,6 +48,9 @@ MAIN_GROUP_ID = _int_env("MAIN_GROUP_ID")
 # Anyone in this group is automatically an admin (members/roles.py). Alpha
 # must be an admin there. Unset = nobody is made admin this way.
 LEADERSHIP_GROUP_ID = _int_env("LEADERSHIP_GROUP_ID")
+# Where the community celebrates birthdays. The weekly brief reads it ONLY
+# for birthdays (src/brief/capture.py). Alpha must be an admin there.
+FELICITATION_GROUP_ID = _int_env("FELICITATION_GROUP_ID")
 
 # ----- Main-group gatekeeping -------------------------
 # The one person allowed to add members without onboarding (the backdoor),
@@ -70,3 +73,31 @@ VOUCH_TAG_DELETE_SECONDS = 6 * 3600   # main-group "send me Hi" tag lifetime
 
 # ----- Group links -------------------------
 INDUCTION_PINNED_URL = os.environ.get("INDUCTION_GROUP_PINNED_MESSAGE")
+
+# ----- Weekly brief (src/brief/) ---------------------------
+# Posted in the induction group every Monday from BRIEF_HOUR_UTC. If Alpha
+# is down then, it posts when it's back, up to BRIEF_LAST_HOUR_UTC that day.
+BRIEF_HOUR_UTC = 9
+BRIEF_LAST_HOUR_UTC = 21
+# Groups whose messages are never stored or sent to Gemini, whatever else
+# says: leadership is private, the onboarding group holds KYC cards, the
+# induction group is where the brief is posted, and the felicitation group
+# is read for birthdays only (no text is stored from it).
+BRIEF_NEVER_READ = {
+  g for g in (LEADERSHIP_GROUP_ID, ONBOARDING_GROUP_ID, INDUCTION_GROUP_ID,
+              FELICITATION_GROUP_ID) if g
+}
+# A count in WEEK IN NUMBERS below this is left out, so a quiet week never
+# looks small. Set to 0 to show every number.
+BRIEF_HIDE_BELOW = 10
+# A day whose digest keeps failing is given up after this many days: its
+# counts are kept, its messages deleted, and it adds no highlights.
+BRIEF_DIGEST_GIVE_UP_DAYS = 2
+# Most text from one group's day sent to Gemini. The newest is kept.
+BRIEF_DIGEST_MAX_CHARS = 60_000
+# Safety net: nothing the brief stores outlives this, whatever happened.
+BRIEF_KEEP_DAYS = 14
+# Anniversaries the brief celebrates: (name, founding date 'YYYY-MM-DD').
+BRIEF_MILESTONES = [
+  ("ATL Men's Forum", "2020-07-20"),
+]
