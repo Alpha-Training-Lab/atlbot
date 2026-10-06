@@ -24,6 +24,11 @@ jobs:
         with:
           fetch-depth: 1
       - uses: anthropics/claude-code-action@86d88e619d8e6caf07b5c3944dd14f441c533718  # v1
+        # The action ends the run at Claude's first result, so a review that
+        # waits on background subagents posts nothing. Run them in the
+        # foreground. See anthropics/claude-code-action#1646 and #1852.
+        env:
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
