@@ -1,6 +1,5 @@
 """Looking members up, expelling and reinstating them, and who may do it."""
 from src.db.connection import get_conn
-from src.db.members import upsert_active
 from src.db.schema import STATUS_ACTIVE, STATUS_REMOVED
 # ===========================================================================
 
@@ -8,19 +7,25 @@ from src.db.schema import STATUS_ACTIVE, STATUS_REMOVED
 # --- who may manage members ---------------------------------------------
 
 def is_manager(user_id):
+  """Only while they're active: being removed any way, not just by /expel
+  (e.g. banned from the main group in Telegram), ends access to members' data."""
   with get_conn() as conn:
     return conn.execute(
-      "SELECT 1 FROM member_managers WHERE user_id = ?", (user_id,)
+      "SELECT 1 FROM member_managers g JOIN members m ON m.user_id = g.user_id "
+      "WHERE g.user_id = ? AND m.status = ?",
+      (user_id, STATUS_ACTIVE),
     ).fetchone() is not None
 
 
-def grant_manager(user_id, username, first_name, last_name, granted_by):
-  """Let someone look members up and expel them. False if they already could."""
+def grant_manager(user_id, granted_by):
+  """Let an active member look members up and expel them. False if they
+  already could or aren't active: this never changes anyone's status, so it
+  can't bring back an expelled member or skip an applicant past induction."""
   with get_conn() as conn:
-    upsert_active(conn, user_id, username, first_name, last_name)
     cur = conn.execute(
-      "INSERT OR IGNORE INTO member_managers (user_id, granted_by) VALUES (?, ?)",
-      (user_id, granted_by),
+      "INSERT OR IGNORE INTO member_managers (user_id, granted_by) "
+      "SELECT user_id, ? FROM members WHERE user_id = ? AND status = ?",
+      (granted_by, user_id, STATUS_ACTIVE),
     )
     if cur.rowcount:
       conn.execute(
@@ -45,7 +50,7 @@ def list_managers():
   with get_conn() as conn:
     return conn.execute(
       """
-      SELECT g.user_id, m.username, m.first_name, m.last_name
+      SELECT g.user_id, m.username, m.first_name, m.last_name, m.status
       FROM member_managers g JOIN members m ON m.user_id = g.user_id
       ORDER BY lower(COALESCE(m.username, m.first_name, ''))
       """

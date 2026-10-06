@@ -30,7 +30,7 @@ def test_expel_removes_every_route_back(fresh_db):
   db = fresh_db
   _member(db, 1, "AdaLead")
   db.grant_role(1, "AdaLead", "Ada", None, db.ADMIN, OWNER)
-  db.grant_manager(1, "AdaLead", "Ada", None, OWNER)
+  db.grant_manager(1, OWNER)
   db.add_special(1, "AdaLead", "Ada", None, "adalead", OWNER)
   db.expel_member(1, ACTOR, "x")
   s = db.member_summary(1)
@@ -121,11 +121,32 @@ def test_reinstate(fresh_db):
 def test_managers_grant_list_revoke(fresh_db):
   db = fresh_db
   _member(db, LEAD, "obtlead")
-  assert db.grant_manager(LEAD, "obtlead", "Obt", None, OWNER)
-  assert not db.grant_manager(LEAD, "obtlead", "Obt", None, OWNER)
+  assert db.grant_manager(LEAD, OWNER)
+  assert not db.grant_manager(LEAD, OWNER)
   assert db.is_manager(LEAD)
   assert [r["username"] for r in db.list_managers()] == ["obtlead"]
   assert db.revoke_manager(LEAD, OWNER)
+  assert not db.is_manager(LEAD)
+
+
+def test_only_active_members_can_be_made_leads(fresh_db):
+  db = fresh_db
+  _member(db, 1, "expelled")
+  db.expel_member(1, ACTOR, "x")
+  _member(db, 2, "applicant", status=db.STATUS_PENDING_REVIEW)
+  for uid, status in ((1, db.STATUS_REMOVED), (2, db.STATUS_PENDING_REVIEW)):
+    assert not db.grant_manager(uid, OWNER)
+    assert not db.is_manager(uid)
+    assert db.get_member(uid)["status"] == status   # status left alone
+  assert not db.grant_manager(12345, OWNER)          # not on record
+
+
+def test_lead_removed_outside_expel_loses_access(fresh_db):
+  db = fresh_db
+  _member(db, LEAD, "obtlead")
+  db.grant_manager(LEAD, OWNER)
+  # e.g. banned from the main group in Telegram (members/main_group.py)
+  db.set_status(LEAD, db.STATUS_REMOVED, note="removed from the main group in Telegram")
   assert not db.is_manager(LEAD)
 
 
@@ -144,7 +165,7 @@ def test_only_the_owner_may_expel_privileged_members(fresh_db):
   db = fresh_db
   from src.members import manage
   _member(db, LEAD, "obtlead")
-  db.grant_manager(LEAD, "obtlead", "Obt", None, OWNER)
+  db.grant_manager(LEAD, OWNER)
   _member(db, 2, "plain")
   _member(db, 3, "anadmin")
   db.grant_role(3, "anadmin", "A", None, db.ADMIN, OWNER)
@@ -161,7 +182,7 @@ def test_who_can_manage(fresh_db):
   _member(db, LEAD, "obtlead")
   _member(db, 3, "anadmin")
   db.grant_role(3, "anadmin", "A", None, db.ADMIN, OWNER)
-  db.grant_manager(LEAD, "obtlead", "Obt", None, OWNER)
+  db.grant_manager(LEAD, OWNER)
   assert manage.can_manage(OWNER)
   assert manage.can_manage(LEAD)
   assert not manage.can_manage(3)   # admins don't get members' data

@@ -349,11 +349,13 @@ async def cmd_obtlead(update, context: ContextTypes.DEFAULT_TYPE):
     rows = db.list_managers()
     lines = [f"🔎 ONBOARDING LEADS ({len(rows)})",
              "They can look members up (/member) and expel ordinary members (/expel).", ""]
-    lines += [f"• {handle_or_name(r)}" for r in rows] or ["None yet."]
+    lines += [f"• {handle_or_name(r)}"
+              + ("" if r["status"] == db.STATUS_ACTIVE else f" ({r['status']}: no access)")
+              for r in rows] or ["None yet."]
     lines += ["", "Add one: /obtlead @username   Remove: /unobtlead @username"]
     await update.message.reply_text("\n".join(lines))
     return
-  done, known_already, unknown = [], [], []
+  done, known_already, not_active, unknown = [], [], [], []
   for raw in context.args:
     key = db.username_key(raw)
     m = db.find_member_by_username(key) if key else None
@@ -361,7 +363,9 @@ async def cmd_obtlead(update, context: ContextTypes.DEFAULT_TYPE):
       unknown.append(raw)
     elif is_owner(m["user_id"]):
       continue
-    elif db.grant_manager(m["user_id"], m["username"], m["first_name"], m["last_name"], owner):
+    elif m["status"] != db.STATUS_ACTIVE:
+      not_active.append(f"@{key} ({m['status']})")
+    elif db.grant_manager(m["user_id"], owner):
       done.append(f"@{key}")
     else:
       known_already.append(f"@{key}")
@@ -370,6 +374,8 @@ async def cmd_obtlead(update, context: ContextTypes.DEFAULT_TYPE):
     lines.append("🔎 Can now look members up and expel them: " + ", ".join(done))
   if known_already:
     lines.append("Already onboarding leads: " + ", ".join(known_already))
+  if not_active:
+    lines.append("Not active members, so not made leads: " + ", ".join(not_active))
   if unknown:
     lines.append("Not on record (ask them to message Alpha first): " + ", ".join(unknown))
   await update.message.reply_text("\n\n".join(lines) or "Nothing to change.")

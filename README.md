@@ -458,7 +458,8 @@ can in a private chat with Alpha:
 Onboarding leads are a separate permission (`member_managers`), not a role:
 the leadership group makes people admins automatically, and that must never
 give access to members' data. `/obtlead` lists them, `/unobtlead @name`
-removes one.
+removes one. Only active members can be made leads, and a lead who stops
+being active, however that happens, loses access until they're active again.
 
 ### Exporting everything (`scripts/export_members.py`)
 
@@ -799,7 +800,7 @@ never half-applies.
 | `vouch_requests` | Each request for a vouch to confirm a member, who the vouch turned out to be, and the outcome (yes, no, expired, not a member, cancelled). |
 | `reason_prompts` | Which member an admin's "Other" decline prompt is about, so the prompt text needn't show their id. |
 | `special_members` | The owner's Legacy Members: linked by Telegram id, or waiting by username until first seen. |
-| `member_managers` | Onboarding leads: who may look members up and expel them. Granted by the owner only. |
+| `member_managers` | Onboarding leads: who may look members up and expel them. Granted by the owner only, to active members; access needs them still active. |
 | `member_roles` | Roles beyond ordinary member (today: admin), and where each came from: the owner (`/admin`) or the leadership group. No row = ordinary member. |
 | `brief_groups` | Groups Alpha is in, and whether the weekly brief reads them. |
 | `brief_messages` | Group messages waiting to be digested. Deleted once their day is. |
