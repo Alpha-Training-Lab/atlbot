@@ -39,6 +39,33 @@ def set_brief_group(chat_id, enabled, added_by):
     )
 
 
+def enable_brief_group(chat_id):
+  """Read this group, keeping who first added Alpha and when."""
+  with get_conn() as conn:
+    conn.execute(
+      "INSERT INTO brief_groups (chat_id, enabled) VALUES (?, 1) "
+      "ON CONFLICT(chat_id) DO UPDATE SET enabled = 1",
+      (chat_id,),
+    )
+
+
+def brief_groups():
+  """Every group on record, read or not."""
+  with get_conn() as conn:
+    return conn.execute(
+      "SELECT chat_id, enabled FROM brief_groups ORDER BY added_at"
+    ).fetchall()
+
+
+def brief_messages_today():
+  """{chat_id: messages stored since midnight UTC, not yet digested}."""
+  with get_conn() as conn:
+    return dict(conn.execute(
+      "SELECT chat_id, COUNT(*) FROM brief_messages "
+      "WHERE sent_at >= date('now') GROUP BY chat_id"
+    ).fetchall())
+
+
 def remove_brief_group(chat_id):
   """Alpha left a group: forget it, and its messages not yet digested."""
   with get_conn() as conn:
@@ -166,6 +193,14 @@ def save_birthdays(day, celebrants):
       "INSERT OR IGNORE INTO brief_birthdays (day, celebrant) VALUES (?, ?)",
       [(day, c) for c in celebrants],
     )
+
+
+def birthdays_recorded_since(day):
+  """How many birthday wishes (one per person per day) since 'YYYY-MM-DD'."""
+  with get_conn() as conn:
+    return conn.execute(
+      "SELECT COUNT(*) FROM brief_birthdays WHERE day >= ?", (day,)
+    ).fetchone()[0]
 
 
 def week_celebrants(week_start):
