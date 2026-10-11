@@ -102,7 +102,7 @@ list:
 | −1 | `members/special.py`, `members/roles.py` | The owner's user-picker answers (Legacy Members, admins), so nothing else treats them as a message |
 | −1 | `members/legacy.py` | Shared phone numbers and Skip taps from the link flow (stopped there, so they never reach KYC or the LLM); silent username matching on main-group posts and DMs |
 | 0 | `src/commands.py`, `members/profile.py` | `/start`, `/profile`, `/kyc`, `/chatid` |
-| 0 | `members/special.py`, `members/roles.py`, `brief/mentions.py` | Owner-only commands in a DM: `/legacy`, `/legacylist`, `/legacyremove`, `/admin`, `/admins`, `/unadmin`, `/askmentions` |
+| 0 | `members/special.py`, `members/roles.py`, `brief/mentions.py` | Owner-only commands in a DM: `/legacy`, `/legacylist`, `/legacyremove`, `/admin`, `/admins`, `/unadmin`, `/askmentions`, `/briefgroups` |
 | 0 | `brief/mentions.py` | `/mentions` and its buttons (`bm:`) |
 | 0 | `members/roles.py` | Posts, joins and leaves in the leadership group |
 | 0 | `onboarding/induction.py` | Everything in the induction group |
@@ -522,8 +522,10 @@ writes highlights, approves it or gets a copy.
    `brief_weeks` makes sure the brief is sent once, and the week's data is
    deleted once it is.
 
-**Which groups:** the main group from the start; any group Alpha is added to
-later if the owner or an admin added it. Never the leadership, onboarding or
+**Which groups:** the main, relationship, fun and matters arising groups
+(`config.BRIEF_READ_GROUPS`) from the start; any
+group the owner or an admin adds Alpha to, or promotes it to admin in
+(`/briefgroups` shows the current list). Never the leadership, onboarding or
 induction group (`config.BRIEF_NEVER_READ`). The felicitation group
 (`FELICITATION_GROUP_ID`) is read for birthdays only: a post saying happy
 birthday, HBD or many happy returns records who it @mentions, and no text is
@@ -698,6 +700,7 @@ chat ID, add the bot to the group and send `/chatid` there.
 | `MIN_INDUCTION_SECONDS` | Optional | 10 days | Minimum time in the induction group before a post is accepted. |
 | `ATL_DB_PATH` | Optional | `<project root>/atl_bot.db` | Where the SQLite file lives; `~` is expanded. |
 | `LEADERSHIP_GROUP_ID` | No | 0 | Members of this group are automatically admins. Alpha must be an admin there. |
+| `RELATIONSHIP_GROUP_ID`, `FUN_GROUP_ID`, `MATTERS_ARISING_GROUP_ID` | No | 0 | More groups the weekly brief reads. Alpha must be an admin there. Only needed for groups Alpha was in before the brief existed; an admin adding or promoting Alpha in a new group switches reading on by itself. |
 | `FELICITATION_GROUP_ID` | For brief birthdays | 0 | Where birthdays are celebrated; the weekly brief reads it for birthdays only. Alpha must be an admin there. Unset = no birthdays in the brief. |
 | `ATL_BACKUP_BUCKET` | For backups | — | S3 bucket used by `scripts/backup_db.py`. |
 
@@ -841,6 +844,7 @@ are ignored for anyone else:
 | `/admins` | List the admins and where each role came from. |
 | `/unadmin @name` | Make someone an ordinary member again (not for leadership-group admins). |
 | `/askmentions` | Post the "may we name you?" invite, with a button, in the main group. |
+| `/briefgroups` | Which groups the weekly brief reads, whether Alpha can see their messages, and how many it has stored today. |
 
 ## Scripts
 

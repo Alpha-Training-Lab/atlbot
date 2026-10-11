@@ -87,6 +87,14 @@ BRIEF_NEVER_READ = {
   g for g in (LEADERSHIP_GROUP_ID, ONBOARDING_GROUP_ID, INDUCTION_GROUP_ID,
               FELICITATION_GROUP_ID) if g
 }
+# Groups the weekly brief reads, besides the main group. Alpha reads a group
+# automatically when an admin adds or promotes it there; these are groups it
+# was already in before that. Never overrides BRIEF_NEVER_READ.
+RELATIONSHIP_GROUP_ID = _int_env("RELATIONSHIP_GROUP_ID")
+FUN_GROUP_ID = _int_env("FUN_GROUP_ID")
+MATTERS_ARISING_GROUP_ID = _int_env("MATTERS_ARISING_GROUP_ID")
+BRIEF_READ_GROUPS = [g for g in (RELATIONSHIP_GROUP_ID, FUN_GROUP_ID,
+                                 MATTERS_ARISING_GROUP_ID) if g]
 # A count in WEEK IN NUMBERS below this is left out, so a quiet week never
 # looks small. Set to 0 to show every number.
 BRIEF_HIDE_BELOW = 10

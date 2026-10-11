@@ -57,7 +57,8 @@ from src.db.brief import (
   mentionable_members, purge_brief_data,
   release_brief_week, remove_brief_group, save_birthdays, save_brief_day,
   save_brief_message, set_brief_group, user_ids_for_usernames,
-  week_celebrants,
+  week_celebrants, enable_brief_group, brief_groups, brief_messages_today,
+  birthdays_recorded_since,
 )
 from src.db.manage import (
   expel_member, grant_manager, is_manager, list_managers, member_summary,
@@ -101,5 +102,6 @@ __all__ = [
   "mentionable_members", "purge_brief_data", "user_ids_for_usernames",
   "release_brief_week", "remove_brief_group", "save_birthdays",
   "save_brief_day", "save_brief_message", "set_brief_group",
-  "week_celebrants",
+  "week_celebrants", "enable_brief_group", "brief_groups",
+  "brief_messages_today", "birthdays_recorded_since",
 ]

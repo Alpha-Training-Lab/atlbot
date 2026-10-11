@@ -138,6 +138,8 @@ def build_app() -> Application:
   app.add_handler(CommandHandler("unadmin", roles.cmd_unadmin, filters=owner_dm), group=0)
   app.add_handler(CommandHandler("askmentions", brief_mentions.cmd_ask_mentions,
                                  filters=owner_dm), group=0)
+  app.add_handler(CommandHandler("briefgroups", brief_capture.cmd_brief_groups,
+                                 filters=owner_dm), group=0)
   app.add_handler(CommandHandler("reinstate", manage.cmd_reinstate, filters=owner_dm), group=0)
   app.add_handler(CommandHandler("obtlead", manage.cmd_obtlead, filters=owner_dm), group=0)
   app.add_handler(CommandHandler("unobtlead", manage.cmd_unobtlead, filters=owner_dm), group=0)
